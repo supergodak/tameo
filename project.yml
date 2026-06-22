@@ -13,7 +13,7 @@ settings:
     MARKETING_VERSION: "0.0.1"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.0"            # TODO: 実装が安定したら Swift 6 言語モードへ
-    DEVELOPMENT_TEAM: ""           # TODO: ATIの10桁チームIDを設定（署名身元の安定 = 権限保持に必須）
+    DEVELOPMENT_TEAM: "8NY87P5TYV"  # ATI K.K. (Apple Developer Program / org)。署名身元の安定 = 権限保持に必須
     CODE_SIGN_STYLE: Automatic
     ENABLE_HARDENED_RUNTIME: YES   # notarize 前提
 
