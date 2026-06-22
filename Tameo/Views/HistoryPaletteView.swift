@@ -15,6 +15,9 @@ struct HistoryPaletteView: View {
     /// アクセシビリティ権限の要求（バナーの「開く」）。
     let onRequestAccessibility: () -> Void
 
+    /// サムネ NSImage のメモ化（行 body 再評価ごとの PNG 再デコードを避ける）。
+    @State private var thumbnailCache = ThumbnailCache()
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -123,14 +126,14 @@ struct HistoryPaletteView: View {
     private func leadingSlot(for item: ClipboardItem, isSelected: Bool) -> some View {
         switch item.kind {
         case .filename:
-            if let data = item.thumbnailPNG, let img = NSImage(data: data) {
+            if let data = item.thumbnailPNG, let img = cachedImage(for: item, data: data) {
                 Image(nsImage: img).resizable().scaledToFit()
             } else {
                 Image(systemName: "doc")
                     .foregroundStyle(isSelected ? Color.white : Color.secondary)
             }
         case .png, .tiff, .pdf:
-            if let data = item.thumbnailPNG, let img = NSImage(data: data) {
+            if let data = item.thumbnailPNG, let img = cachedImage(for: item, data: data) {
                 Image(nsImage: img).resizable().scaledToFit()
                     .clipShape(RoundedRectangle(cornerRadius: 3))
             } else {
@@ -150,6 +153,11 @@ struct HistoryPaletteView: View {
         case .text:
             EmptyView()
         }
+    }
+
+    /// 永続ID単位でサムネ NSImage を取得（キャッシュ経由。フル原寸は読まない）。
+    private func cachedImage(for item: ClipboardItem, data: Data) -> NSImage? {
+        thumbnailCache.image(forKey: "\(item.persistentModelID)", data: data)
     }
 
     // MARK: - Footer（ドット rail ＋ 位置 ＋ キー凡例）

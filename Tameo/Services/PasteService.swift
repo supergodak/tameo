@@ -82,8 +82,17 @@ final class PasteService: PasteServicing {
                 pb.writeObjects(objects)
             case .text, .url, .color:
                 pb.setString(item.content, forType: .string)
-            case .png, .tiff, .rtf, .rtfd, .pdf:
-                // PR-B/C で原本バイナリを書く。現状はテキスト表現があれば貼る。
+            case .png, .tiff:
+                // 画像はラベル文字列を .string に書かない（"Image · …" を貼るのは無より悪い）。
+                // 原本があればそれを、truncated 等で無ければサムネ PNG を貼る。
+                let imgType: NSPasteboard.PasteboardType = (item.kind == .png) ? .png : .tiff
+                if let data = item.payloadData, !data.isEmpty {
+                    pb.setData(data, forType: imgType)
+                } else if let thumb = item.thumbnailPNG, !thumb.isEmpty {
+                    pb.setData(thumb, forType: .png)
+                }
+            case .rtf, .rtfd, .pdf:
+                // PR-C で原本バイナリを書く。現状はテキスト表現があれば貼る。
                 pb.setString(item.content, forType: .string)
             }
         }

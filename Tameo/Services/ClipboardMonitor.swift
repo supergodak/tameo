@@ -17,6 +17,13 @@ final class ClipboardMonitor {
     /// ポーリング間隔（秒）。100〜500ms が実用域。
     var pollInterval: TimeInterval = 0.4
 
+    /// 画像原本を保持する上限。超過時は原本を破棄しサムネ＋メタのみ残す（payloadTruncated=true）。
+    static let maxOriginalBytes = 8 * 1024 * 1024
+    /// 一覧サムネの最長辺ピクセル。
+    static let thumbnailMaxPixel = 128
+    /// 画像の非同期取り込みで、古い結果が新しい結果の後に着地しないための単調ガード。
+    private var latestAppliedImageChange = 0
+
     init(store: HistoryStore, gate: PasteboardWriteGate) {
         self.store = store
         self.gate = gate
@@ -68,19 +75,25 @@ final class ClipboardMonitor {
 
         // ==== Tameo の背景経路で内容を読む唯一の箇所 ====
         // まず型集合（中身を読まない）で種別を判定し、勝った型だけを 1 回読む。
-        if let payload = classify(items: items, source: source) {
-            store.ingest(payload)
+        var allTypes = Set<NSPasteboard.PasteboardType>()
+        for item in items { allTypes.formUnion(item.types) }
+        let kind = ClipKind.detect(types: allTypes)
+
+        switch kind {
+        case .png, .tiff:
+            // 画像はサムネ生成・寸法読取を off-main で行うため非同期経路。
+            captureImage(items: items, kind: kind, source: source, changeCount: change)
+        default:
+            if let payload = classify(kind: kind, items: items, source: source) {
+                store.ingest(payload)
+            }
         }
         // ===============================================
     }
 
-    /// 型集合で種別を判定→対応する 1 経路だけ内容を読む。PR-A は filename と text を実装
-    /// （画像/リッチは PR-B/C）。未対応の binary はテキスト表現があればそれを取り込む。
-    private func classify(items: [NSPasteboardItem], source: String?) -> CapturedPayload? {
-        var allTypes = Set<NSPasteboard.PasteboardType>()
-        for item in items { allTypes.formUnion(item.types) }
-
-        switch ClipKind.detect(types: allTypes) {
+    /// 同期取り込み（filename / text）。未対応の binary はテキスト表現があればそれを取り込む。
+    private func classify(kind: ClipKind, items: [NSPasteboardItem], source: String?) -> CapturedPayload? {
+        switch kind {
         case .filename:
             return captureFilenames(items: items, source: source)
         default:
@@ -122,6 +135,60 @@ final class ClipboardMonitor {
             sourceBundleID: source,
             byteSize: displayPaths.utf8.count
         )
+    }
+
+    /// 画像（png/tiff）を捕捉。raw を main で取得し、サムネ生成＋ピクセル寸法は `Task.detached` で行い、
+    /// changeCount 単調ガード付きで MainActor へ戻して取り込む。NSImage/CGImage はこの境界を越えない
+    /// （CapturedPayload は値型のみ）。貼り戻し由来の自己コピーは tick の gate 判定で既に弾かれている。
+    private func captureImage(items: [NSPasteboardItem], kind: ClipKind, source: String?, changeCount: Int) {
+        let pbType: NSPasteboard.PasteboardType = (kind == .png) ? .png : .tiff
+        var raw: Data?
+        for item in items {
+            if let d = item.data(forType: pbType), !d.isEmpty { raw = d; break }
+        }
+        guard let raw else { return }
+
+        let truncated = raw.count > Self.maxOriginalBytes
+        let payloadData: Data? = truncated ? nil : raw
+        let uti = kind.preferredUTI
+        let label = (kind == .png) ? "PNG" : "TIFF"
+
+        Task.detached(priority: .utility) {
+            let thumb = ImageThumbnailer.thumbnailPNG(from: raw, maxPixel: Self.thumbnailMaxPixel)
+            let (w, h) = ImageThumbnailer.pixelSize(of: raw) ?? (0, 0)
+            // 重複排除キーの入力バイト。通常は原本。原本破棄(truncated)時は空 Data 衝突を避けるため
+            // サムネへフォールバックし、さらに寸法・原本サイズを混ぜて別の巨大画像が同一サムネで衝突しないようにする。
+            let canonical: Data
+            if let payloadData {
+                canonical = payloadData
+            } else if let thumb {
+                canonical = thumb + Data("\(w)x\(h)x\(raw.count)".utf8)
+            } else {
+                canonical = raw
+            }
+            let content = "Image · \(w)×\(h) · \(label)"
+            let payload = CapturedPayload(
+                kind: kind,
+                content: content,
+                payloadUTI: uti,
+                canonicalBytes: canonical,
+                payloadData: payloadData,
+                thumbnailPNG: thumb,
+                pixelWidth: w,
+                pixelHeight: h,
+                payloadTruncated: truncated,
+                sourceBundleID: source,
+                byteSize: raw.count
+            )
+            await self.ingestImageIfCurrent(payload, changeCount: changeCount)
+        }
+    }
+
+    /// 単調ガード: より新しい変化を既に取り込んでいたら、この（古い）非同期結果は捨てる。
+    private func ingestImageIfCurrent(_ payload: CapturedPayload, changeCount: Int) {
+        guard changeCount >= latestAppliedImageChange else { return }
+        latestAppliedImageChange = changeCount
+        store.ingest(payload)
     }
 
     /// ファイルアイコンを小さな PNG にして返す（行描画での disk hit を避けるため取り込み時に 1 回だけ解決）。
