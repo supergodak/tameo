@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import PDFKit
 
 /// クリップボードの変化を監視する唯一のオブジェクト。
 /// 背景動作で `NSPasteboard.general` に触れるのはここだけ。
@@ -91,19 +92,30 @@ final class ClipboardMonitor {
         // ===============================================
     }
 
-    /// 同期取り込み（filename / text）。未対応の binary はテキスト表現があればそれを取り込む。
+    /// 同期取り込み。種別ごとに対応経路を 1 回読む。各 capture が失敗したらテキスト表現へフォールバック。
     private func classify(kind: ClipKind, items: [NSPasteboardItem], source: String?) -> CapturedPayload? {
         switch kind {
         case .filename:
-            return captureFilenames(items: items, source: source)
+            return captureFilenames(items: items, source: source) ?? textFallback(items: items, source: source)
+        case .url:
+            return captureURL(items: items, source: source) ?? textFallback(items: items, source: source)
+        case .color:
+            return captureColor(source: source) ?? textFallback(items: items, source: source)
+        case .rtf, .rtfd, .pdf:
+            return captureRichData(kind: kind, items: items, source: source) ?? textFallback(items: items, source: source)
         default:
-            for item in items {
-                if let text = item.string(forType: .string), !text.isEmpty {
-                    return .text(text, source: source)
-                }
-            }
-            return nil
+            return textFallback(items: items, source: source)
         }
+    }
+
+    /// テキスト表現があればそれを取り込む（各種別捕捉のフォールバック）。
+    private func textFallback(items: [NSPasteboardItem], source: String?) -> CapturedPayload? {
+        for item in items {
+            if let text = item.string(forType: .string), !text.isEmpty {
+                return .text(text, source: source)
+            }
+        }
+        return nil
     }
 
     /// file URL を読み、パス文字列＋先頭ファイルのアイコンから filename ペイロードを作る。
@@ -135,6 +147,92 @@ final class ClipboardMonitor {
             sourceBundleID: source,
             byteSize: displayPaths.utf8.count
         )
+    }
+
+    /// 非ファイル URL（.URL 型）。content=URL 文字列。
+    private func captureURL(items: [NSPasteboardItem], source: String?) -> CapturedPayload? {
+        for item in items {
+            if let s = item.string(forType: .URL), !s.isEmpty {
+                return CapturedPayload(
+                    kind: .url, content: s, payloadUTI: ClipKind.url.preferredUTI,
+                    canonicalBytes: Data(s.utf8), sourceBundleID: source, byteSize: s.utf8.count
+                )
+            }
+        }
+        return nil
+    }
+
+    /// 色（NSColor 型）。content=#RRGGBB。勝った型（color）のみを 1 回読む。
+    private func captureColor(source: String?) -> CapturedPayload? {
+        guard let colors = pasteboard.readObjects(forClasses: [NSColor.self], options: nil) as? [NSColor],
+              let color = colors.first else { return nil }
+        let hex = color.tameoHexString
+        return CapturedPayload(
+            kind: .color, content: hex, payloadUTI: ClipKind.color.preferredUTI,
+            canonicalBytes: Data(hex.utf8), colorHex: hex, sourceBundleID: source, byteSize: hex.utf8.count
+        )
+    }
+
+    /// リッチデータ（rtf/rtfd/pdf）。原本を payloadData(externalStorage) に格納し、
+    /// content は表示・検索・平文貼付用ラベル（rtf/rtfd=平文化／pdf=ページ数）。8MB 上限で原本破棄。
+    private func captureRichData(kind: ClipKind, items: [NSPasteboardItem], source: String?) -> CapturedPayload? {
+        let pbType: NSPasteboard.PasteboardType
+        switch kind {
+        case .rtf: pbType = .rtf
+        case .rtfd: pbType = .rtfd
+        case .pdf: pbType = .pdf
+        default: return nil
+        }
+        var data: Data?
+        for item in items {
+            if let d = item.data(forType: pbType), !d.isEmpty { data = d; break }
+        }
+        guard let data else { return nil }
+
+        let truncated = data.count > Self.maxOriginalBytes
+        // 原本破棄が確定する大データは、main をブロックする重いパース（rtf 平文化 / pdf 解析）を避け汎用ラベルにする。
+        let label = truncated ? Self.genericLabel(kind: kind) : Self.richLabel(kind: kind, data: data)
+        guard !label.isEmpty else { return nil }
+
+        let payloadData: Data? = truncated ? nil : data
+        // 重複排除キー: 通常は原本バイト。原本破棄時はラベル＋サイズで衝突回避。
+        let canonical = payloadData ?? Data("\(label)\u{0}\(data.count)".utf8)
+
+        return CapturedPayload(
+            kind: kind, content: label, payloadUTI: kind.preferredUTI,
+            canonicalBytes: canonical, payloadData: payloadData, payloadTruncated: truncated,
+            sourceBundleID: source, byteSize: data.count
+        )
+    }
+
+    /// パースを伴わない汎用ラベル（8MB 超で原本破棄が確定した場合に使う）。
+    private static func genericLabel(kind: ClipKind) -> String {
+        switch kind {
+        case .rtf: return "RTF"
+        case .rtfd: return "RTFD"
+        case .pdf: return "PDF"
+        default: return ""
+        }
+    }
+
+    /// リッチデータの表示ラベル（rtf/rtfd=平文化、pdf=ページ数）。
+    private static func richLabel(kind: ClipKind, data: Data) -> String {
+        switch kind {
+        case .rtf, .rtfd:
+            let docType: NSAttributedString.DocumentType = (kind == .rtf) ? .rtf : .rtfd
+            let attr = try? NSAttributedString(
+                data: data,
+                options: [.documentType: docType],
+                documentAttributes: nil
+            )
+            let plain = (attr?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return plain.isEmpty ? (kind == .rtf ? "RTF" : "RTFD") : plain
+        case .pdf:
+            let pages = PDFDocument(data: data)?.pageCount ?? 0
+            return pages > 0 ? "PDF · \(pages) page\(pages == 1 ? "" : "s")" : "PDF"
+        default:
+            return ""
+        }
     }
 
     /// 画像（png/tiff）を捕捉。raw を main で取得し、サムネ生成＋ピクセル寸法は `Task.detached` で行い、

@@ -80,8 +80,15 @@ final class PasteService: PasteServicing {
                 // 既定はパス文字列（ターミナル/エディタ向け）。実ファイル参照も併載し Finder では複製可能に。
                 let objects: [NSPasteboardWriting] = (item.fileURLs as [NSURL]) + [item.content as NSString]
                 pb.writeObjects(objects)
-            case .text, .url, .color:
+            case .text, .url:
                 pb.setString(item.content, forType: .string)
+            case .color:
+                // 色対応アプリには NSColor、プレーン先には #hex 文字列を併載。
+                if let color = NSColor(hexString: item.colorHex) {
+                    pb.writeObjects([color, item.content as NSString])
+                } else {
+                    pb.setString(item.content, forType: .string)
+                }
             case .png, .tiff:
                 // 画像はラベル文字列を .string に書かない（"Image · …" を貼るのは無より悪い）。
                 // 原本があればそれを、truncated 等で無ければサムネ PNG を貼る。
@@ -91,9 +98,24 @@ final class PasteService: PasteServicing {
                 } else if let thumb = item.thumbnailPNG, !thumb.isEmpty {
                     pb.setData(thumb, forType: .png)
                 }
-            case .rtf, .rtfd, .pdf:
-                // PR-C で原本バイナリを書く。現状はテキスト表現があれば貼る。
+            case .rtf:
+                if let data = item.payloadData, !data.isEmpty {
+                    pb.setData(data, forType: .rtf)
+                }
+                pb.setString(item.content, forType: .string)   // 平文フォールバック（content は平文化済み）
+            case .rtfd:
+                if let data = item.payloadData, !data.isEmpty {
+                    pb.setData(data, forType: .rtfd)
+                }
                 pb.setString(item.content, forType: .string)
+            case .pdf:
+                // 原本があれば PDF データを貼る。ラベルは通常 .string に書かない（無意味なため）。
+                if let data = item.payloadData, !data.isEmpty {
+                    pb.setData(data, forType: .pdf)
+                } else {
+                    // 原本破棄(>8MB)時は最低限ラベルを貼る（clearContents 済みのクリップボードを空のまま放置しない）。
+                    pb.setString(item.content, forType: .string)
+                }
             }
         }
 
