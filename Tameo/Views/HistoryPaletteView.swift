@@ -1,10 +1,11 @@
 import SwiftUI
 import SwiftData
 
-/// ホットキーで開くフローティング・パレットの中身。
-/// 操作: ↑↓ で選択移動 / Return で確定 / 1–9 で直接確定 / Esc で閉じる / クリックでも確定。
-/// データ源は PaletteModel.visibleItems（`show()` 時に確定したスナップショット）一本。
-/// キーイベントの捕捉は HistoryPanelController（NSEvent ローカルモニタ）側で行い、ここは表示専任。
+/// ホットキーで開くフローティング・パレット（Decade Pager）。
+/// 1ページ=10件(decade)を固定高で表示。操作:
+///   数字 1-9,0 で表示行を即確定 / ↑↓ 行移動(端でページ送り) / ←→・Tab・[ ] でページ送り /
+///   ⌘1…⌘0 で decade 直接ジャンプ / Return 確定 / Esc 閉じ / クリック確定。
+/// キーイベントの捕捉は HistoryPanelController（NSEvent ローカルモニタ）側。ここは表示専任。
 struct HistoryPaletteView: View {
     @Environment(PaletteModel.self) private var model
 
@@ -14,7 +15,6 @@ struct HistoryPaletteView: View {
     let onRequestAccessibility: () -> Void
 
     var body: some View {
-        let shown = model.visibleItems
         VStack(spacing: 0) {
             header
 
@@ -25,24 +25,35 @@ struct HistoryPaletteView: View {
                 Divider()
             }
 
-            if shown.isEmpty {
+            if model.visibleItems.isEmpty {
                 Spacer()
                 Text("履歴はまだありません")
                     .foregroundStyle(.secondary)
                 Spacer()
             } else {
-                listView(shown)
+                rows
+                Spacer(minLength: 0)
+                Divider()
+                footer
             }
         }
         .frame(width: 360, height: 440)
+        .clipped()   // 万一コンテンツが固定高を超えてもパネル外へ描画しない保護
     }
 
-    // MARK: - Subviews
+    // MARK: - Header
 
     private var header: some View {
-        HStack {
+        HStack(spacing: 8) {
             Text("Tameo — 履歴")
                 .font(.headline)
+            if let range = model.displayedRange {
+                Text("\(range.lowerBound)–\(range.upperBound)")
+                    .font(.system(.caption, design: .rounded).weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Color.secondary.opacity(0.15), in: Capsule())
+            }
             Spacer()
             Text("⌘⇧V")
                 .font(.caption)
@@ -51,6 +62,73 @@ struct HistoryPaletteView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
     }
+
+    // MARK: - Rows（固定高1ページ・スクロールなし）
+
+    private var rows: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(model.pageItems.enumerated()), id: \.element.persistentModelID) { index, item in
+                row(index: index, item: item)
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 4)
+        // ページ切替を軽くクロスフェード。実発火はミューテーション側の withAnimation が駆動する。
+        .id(model.pageIndex)
+        .transition(.opacity)
+    }
+
+    private func row(index: Int, item: ClipboardItem) -> some View {
+        let isSelected = (model.clampedRow == index)
+        let badge = index == 9 ? "0" : "\(index + 1)"   // 0 = 10行目
+        return Button {
+            model.rowInPage = index
+            onSelect(item)
+        } label: {
+            HStack(spacing: 8) {
+                Text(badge)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
+                    .frame(width: 16, alignment: .trailing)
+                Text(item.content)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .foregroundStyle(isSelected ? Color.white : Color.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(isSelected ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Footer（ドット rail ＋ 位置 ＋ キー凡例）
+
+    private var footer: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 6) {
+                ForEach(Array(0..<model.pageCount), id: \.self) { i in
+                    Circle()
+                        .fill(i == model.pageIndex ? Color.accentColor : Color.secondary.opacity(0.35))
+                        .frame(width: 6, height: 6)
+                }
+                Spacer()
+                Text("\(model.pageIndex + 1)/\(model.pageCount) · \(model.visibleItems.count) items")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Text("←/→ 頁 · 1-0 貼付 · ↑↓ 移動 · ⏎ 確定 · esc")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    // MARK: - Accessibility banner
 
     private var accessibilityBanner: some View {
         HStack(spacing: 8) {
@@ -71,56 +149,5 @@ struct HistoryPaletteView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color.orange.opacity(0.08))
-    }
-
-    private func listView(_ shown: [ClipboardItem]) -> some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(Array(shown.enumerated()), id: \.element.persistentModelID) { index, item in
-                        row(index: index, item: item)
-                            .id(item.persistentModelID)
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-            // 強調もスクロールも clampedSelection 基準に統一（両者の指す行がズレない）。
-            .onChange(of: model.selectedIndex) { _, _ in scrollToSelection(proxy, shown) }
-            // オープン毎（sessionRevision 変化）に選択位置へスクロールし直す（0→0 でも確実に発火）。
-            .onChange(of: model.sessionRevision) { _, _ in scrollToSelection(proxy, shown) }
-        }
-    }
-
-    private func scrollToSelection(_ proxy: ScrollViewProxy, _ shown: [ClipboardItem]) {
-        guard let idx = model.clampedSelection, shown.indices.contains(idx) else { return }
-        withAnimation(.linear(duration: 0.08)) {
-            proxy.scrollTo(shown[idx].persistentModelID, anchor: .center)
-        }
-    }
-
-    private func row(index: Int, item: ClipboardItem) -> some View {
-        let isSelected = (model.clampedSelection == index)
-        return Button {
-            model.selectedIndex = index
-            onSelect(item)
-        } label: {
-            HStack(spacing: 8) {
-                Text(index < 9 ? "\(index + 1)" : " ")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
-                    .frame(width: 16, alignment: .trailing)
-                Text(item.content)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .foregroundStyle(isSelected ? Color.white : Color.primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .contentShape(Rectangle())
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(isSelected ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 5))
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 4)
     }
 }

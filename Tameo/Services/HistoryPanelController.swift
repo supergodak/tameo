@@ -3,32 +3,96 @@ import SwiftUI
 import SwiftData
 import Observation
 
-/// 履歴パレットの一時的なUI状態。パネル表示中だけ生きる軽量な状態で、SwiftDataモデルではない。
-/// `visibleItems` は `show()` 時にコントローラがスナップショット投入する“唯一の真実”。
-/// 表示中は並びを凍結する（一覧がカーソル下で動かないため、index 基準の選択が安全になる）。
+/// 履歴パレットの一時的なUI状態（Decade Pager）。
+/// 一覧を 10 件＝1ページ（decade）に区切り、`pageIndex` と「ページ内の選択行 `rowInPage`(0..9)」で
+/// 選択を表す。グローバル添字は確定時にだけ導出する（ページ境界の桁ズレを避けるための単一基準）。
+/// `visibleItems` は `show()` 時のスナップショット（最大 maxItems 件）で、表示中は不変。
 @MainActor
 @Observable
 final class PaletteModel {
-    /// ハイライト中の行（`visibleItems` のインデックス）。
-    var selectedIndex: Int = 0
-    /// パレットに表示しているスナップショット（`show()` 時に確定。表示中は不変）。
+    static let pageSize = 10
+
+    /// 現在のページ（decade）。0 始まり。
+    var pageIndex: Int = 0
+    /// 現ページ内で選択中の行（0..9）。
+    var rowInPage: Int = 0
+    /// 表示スナップショット（最終使用日時の新しい順、先頭がページ1）。
     var visibleItems: [ClipboardItem] = []
     /// アクセシビリティ権限の有無（バナー表示の判定。`show()` 時に再評価）。
     var accessibilityTrusted: Bool = true
-    /// オープンの世代。開くたびに +1 して、選択位置までスクロールし直すトリガにする。
-    var sessionRevision: Int = 0
 
-    /// `selectedIndex` を有効範囲にクランプして返す（空なら nil）。
-    var clampedSelection: Int? {
-        guard !visibleItems.isEmpty else { return nil }
-        return min(max(selectedIndex, 0), visibleItems.count - 1)
+    var pageCount: Int {
+        max(1, (visibleItems.count + Self.pageSize - 1) / Self.pageSize)
+    }
+    var pageStart: Int { pageIndex * Self.pageSize }
+
+    /// 現ページに表示する 10 件（最終ページは 10 件未満になりうる）。
+    var pageItems: [ClipboardItem] {
+        guard pageStart < visibleItems.count else { return [] }
+        return Array(visibleItems[pageStart ..< min(pageStart + Self.pageSize, visibleItems.count)])
     }
 
-    /// 選択を delta だけ移動（端でクランプ。循環しない）。
-    func moveSelection(by delta: Int) {
-        guard !visibleItems.isEmpty else { return }
-        let base = clampedSelection ?? 0
-        selectedIndex = min(max(base + delta, 0), visibleItems.count - 1)
+    /// 現ページ内の有効な選択行（空なら nil）。ハイライト判定に使う。
+    var clampedRow: Int? {
+        let c = pageItems.count
+        guard c > 0 else { return nil }
+        return min(max(rowInPage, 0), c - 1)
+    }
+
+    /// 確定対象の項目（グローバル添字はここで導出）。
+    var selectedItem: ClipboardItem? {
+        let items = pageItems
+        guard let row = clampedRow, items.indices.contains(row) else { return nil }
+        return items[row]
+    }
+
+    /// 表示中の項目レンジ（1始まり）。例: 11...20。
+    var displayedRange: ClosedRange<Int>? {
+        let items = pageItems
+        guard !items.isEmpty else { return nil }
+        return (pageStart + 1)...(pageStart + items.count)
+    }
+
+    /// 開くたびに先頭ページ・先頭行へ。
+    func reset() {
+        pageIndex = 0
+        rowInPage = 0
+    }
+
+    /// ページ内で選択を移動。端では隣ページへロールオーバー（末端ではクランプ）。
+    func moveRow(by delta: Int) {
+        let count = pageItems.count
+        guard count > 0 else { return }
+        let cur = min(max(rowInPage, 0), count - 1)
+        let next = cur + delta
+        if next < 0 {
+            if pageIndex > 0 {
+                pageIndex -= 1
+                rowInPage = max(0, pageItems.count - 1)   // 前ページの最終行へ
+            } else {
+                rowInPage = 0
+            }
+        } else if next >= count {
+            if pageIndex < pageCount - 1 {
+                pageIndex += 1
+                rowInPage = 0                              // 次ページの先頭へ
+            } else {
+                rowInPage = count - 1
+            }
+        } else {
+            rowInPage = next
+        }
+    }
+
+    /// ページを相対移動。選択行オフセット `rowInPage` は保持し、表示・確定時に clampedRow/selectedItem 側で
+    /// クランプする（短い最終ページを通過しても元のオフセットが壊れない）。
+    func page(by delta: Int) {
+        pageIndex = min(max(pageIndex + delta, 0), pageCount - 1)
+    }
+
+    /// 指定ページ（decade）へ直接ジャンプ（選択行オフセットは保持）。
+    func goToPage(_ n: Int) {
+        pageIndex = min(max(n, 0), pageCount - 1)
     }
 }
 
@@ -36,6 +100,9 @@ final class PaletteModel {
 /// MenuBarExtra(.window) はホットキーから直接開けないため、貼り付け面は専用パネルで完全自前制御する。
 @MainActor
 final class HistoryPanelController {
+    /// パレットが保持・表示する履歴の最大件数（10件×10ページ）。将来は設定で可変にする。
+    static let maxItems = 100
+
     private let modelContainer: ModelContainer
     private let store: HistoryStore
     private let paste: PasteService
@@ -67,16 +134,13 @@ final class HistoryPanelController {
     func show() {
         // 自分を前面化する前に、貼り付け対象を捕捉しておく。
         targetApp = NSWorkspace.shared.frontmostApplication
-        // 一覧スナップショットと選択・権限状態を“キーモニタ装着前”に確定させる（遅延同期レースを排除）。
+        // スナップショットと選択・権限状態を“キーモニタ装着前”に確定させる（遅延同期レースを排除）。
         model.visibleItems = fetchTopItems()
-        model.selectedIndex = 0
+        model.reset()
         model.accessibilityTrusted = AccessibilityAuthorization.isTrusted
-        model.sessionRevision &+= 1
 
         let panel = ensurePanel()
-        if !panel.isVisible {
-            positionTopCenter(panel)
-        }
+        positionAtMouse(panel)   // 開くたびにカーソル位置へ（Clipy流。視線/マウス移動を最小化）
         installKeyMonitor()
         NSApp.activate()
         panel.makeKeyAndOrderFront(nil)
@@ -89,11 +153,11 @@ final class HistoryPanelController {
 
     // MARK: - Snapshot
 
-    /// 現在の履歴上位（最終使用日時の新しい順）をスナップショットとして取得。
-    /// ビュー側の旧 @Query と同じ並び。表示中はこの配列を凍結して使う。
+    /// 現在の履歴上位（最終使用日時の新しい順）を最大 maxItems 件スナップショットする。
+    /// 表示中はこの配列を凍結して使う（ページUIなので背は固定、画面外化しない）。
     private func fetchTopItems() -> [ClipboardItem] {
         var d = FetchDescriptor<ClipboardItem>(sortBy: [SortDescriptor(\.lastUsedAt, order: .reverse)])
-        d.fetchLimit = 50
+        d.fetchLimit = Self.maxItems
         return (try? modelContainer.mainContext.fetch(d)) ?? []
     }
 
@@ -120,33 +184,42 @@ final class HistoryPanelController {
         }
     }
 
+    /// ページ変化を伴う操作はトランザクションで包み、クロスフェード（.id+.transition）を実発火させる。
+    private func animated(_ change: () -> Void) {
+        withAnimation(.easeOut(duration: 0.12), change)
+    }
+
     /// 戻り値 true = 消費（システムへ流さない）。
     private func handleKeyDown(_ event: NSEvent) -> Bool {
         switch event.keyCode {
-        case 53: // esc
-            hide()
-            return true
-        case 125: // ↓
-            model.moveSelection(by: 1)
-            return true
-        case 126: // ↑
-            model.moveSelection(by: -1)
-            return true
-        case 36, 76: // return / keypad enter
-            commitSelected()
-            return true
-        default:
-            break
+        case 53: hide(); return true                                              // esc
+        case 125: animated { model.moveRow(by: 1) }; return true                  // ↓
+        case 126: animated { model.moveRow(by: -1) }; return true                 // ↑
+        case 123, 33: animated { model.page(by: -1) }; return true                // ← / [
+        case 124, 30: animated { model.page(by: 1) }; return true                 // → / ]
+        case 48: animated { model.page(by: event.modifierFlags.contains(.shift) ? -1 : 1) }; return true  // ⇧Tab / Tab
+        case 36, 76: commitSelected(); return true                                // return / keypad enter
+        default: break
         }
 
-        // 数字キー 1–9：その行を直接選択して確定（修飾キー併用時は無視＝⌘1 等を奪わない）。
-        let mods = event.modifierFlags.intersection([.command, .option, .control])
-        if mods.isEmpty,
-           let chars = event.charactersIgnoringModifiers, chars.count == 1,
-           let digit = Int(chars), (1...9).contains(digit) {
-            let idx = digit - 1
-            if idx < model.visibleItems.count {
-                model.selectedIndex = idx
+        // 数字キー（1-9, 0）。0 は各ページの 10 行目。Shift も判定対象に含め、⇧+数字の誤爆ペーストを防ぐ。
+        guard let chars = event.charactersIgnoringModifiers, chars.count == 1,
+              let digit = Int(chars), (0...9).contains(digit) else { return false }
+        let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
+
+        if mods == .command {
+            // ⌘N: decade へ直接ジャンプ（⌘1=1ページ目 … ⌘0=10ページ目）。確定はしない。範囲外は無視（消費のみ）。
+            let target = digit == 0 ? 9 : digit - 1
+            if target < model.pageCount {
+                animated { model.goToPage(target) }
+            }
+            return true
+        }
+        if mods.isEmpty {
+            // 素の数字: 現ページの該当行を選択して即確定。
+            let row = digit == 0 ? 9 : digit - 1
+            if row < model.pageItems.count {
+                model.rowInPage = row
                 commitSelected()
             }
             return true
@@ -157,8 +230,8 @@ final class HistoryPanelController {
     // MARK: - Private
 
     private func commitSelected() {
-        guard let idx = model.clampedSelection, model.visibleItems.indices.contains(idx) else { return }
-        commit(model.visibleItems[idx])
+        guard let item = model.selectedItem else { return }
+        commit(item)
     }
 
     /// 選択確定：パネルを閉じ、最終使用日時を更新（先頭へ）し、対象アプリへ貼り付け。
@@ -214,15 +287,21 @@ final class HistoryPanelController {
         return p
     }
 
-    private func positionTopCenter(_ panel: NSPanel) {
-        guard let screen = NSScreen.main else {
+    /// パレットの左上をマウスカーソル付近に置く（Clipy流に下＋右へ展開）。
+    /// カーソルのあるスクリーンの visibleFrame 内にクランプして画面外へはみ出さないようにする。
+    /// パネルは固定高（1ページ=10件）なので、件数が増えてもこのクランプは常に成立する。
+    private func positionAtMouse(_ panel: NSPanel) {
+        let mouse = NSEvent.mouseLocation   // グローバル座標（左下原点）
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
+        guard let screen else {
             panel.center()
             return
         }
         let vf = screen.visibleFrame
         let size = panel.frame.size
-        let x = vf.midX - size.width / 2
-        let y = vf.maxY - size.height - 60
+        // origin は左下基準。top をカーソルに合わせる＝ origin.y = mouse.y - height。
+        let x = min(max(mouse.x, vf.minX), vf.maxX - size.width)
+        let y = min(max(mouse.y - size.height, vf.minY), vf.maxY - size.height)
         panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 }
