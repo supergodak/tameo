@@ -38,6 +38,8 @@ struct MenuBarContentView: View {
             HStack {
                 Button("Clear History") { confirmClear = true }
                 Spacer()
+                Button("Settings…") { openSettings() }
+                    .keyboardShortcut(",", modifiers: .command)
                 Button("Quit Tameo") { NSApplication.shared.terminate(nil) }
                     .keyboardShortcut("q")
             }
@@ -52,5 +54,13 @@ struct MenuBarContentView: View {
             }
             Button("Cancel", role: .cancel) { }
         }
+    }
+
+    /// 設定ウィンドウ（SwiftUI `Settings` scene）を開く。
+    /// LSUIElement（Dock非表示）＋ `MenuBarExtra(.window)` 環境では `SettingsLink` だけだと
+    /// 背面化しがちなため、明示的にアプリを前面化してから標準セレクタで開く。
+    private func openSettings() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
 }

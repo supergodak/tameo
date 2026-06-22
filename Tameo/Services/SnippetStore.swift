@@ -1,0 +1,107 @@
+import Foundation
+import SwiftData
+import Observation
+
+/// スニペット（フォルダ／定型文）の唯一の書き込み主体。すべて MainActor 上で動く。
+/// `HistoryStore` と対称：View からの直叩き（insert/delete/save）を禁止し、書き込みをここへ一本化する。
+/// order は D&D／移動後に 0..n の密連番へ再採番する。SwiftData の to-many は順序非保証ゆえ、
+/// 取り出しは常に `order` 昇順でソートする（`SnippetFolder.orderedSnippets` 経由）。
+@MainActor
+@Observable
+final class SnippetStore {
+    private let modelContext: ModelContext
+
+    init(modelContext: ModelContext) {
+        self.modelContext = modelContext
+    }
+
+    // MARK: - Fetch
+
+    /// 全フォルダ（order 昇順）。編集UI用。
+    func allFolders() -> [SnippetFolder] {
+        let d = FetchDescriptor<SnippetFolder>(sortBy: [SortDescriptor(\.order)])
+        return (try? modelContext.fetch(d)) ?? []
+    }
+
+    /// パレット呼び出し用：有効なフォルダのみ（order 昇順）。
+    func enabledFolders() -> [SnippetFolder] {
+        allFolders().filter { $0.enabled }
+    }
+
+    // MARK: - Folder CRUD
+
+    @discardableResult
+    func addFolder(title: String) -> SnippetFolder {
+        // 末尾 order + 1（allFolders は order 昇順なので last が最大）。
+        let nextOrder = (allFolders().last?.order ?? -1) + 1
+        let folder = SnippetFolder(title: title, order: nextOrder)
+        modelContext.insert(folder)
+        save()
+        return folder
+    }
+
+    func renameFolder(_ folder: SnippetFolder, title: String) {
+        folder.title = title
+        save()
+    }
+
+    func setFolderEnabled(_ folder: SnippetFolder, _ enabled: Bool) {
+        folder.enabled = enabled
+        save()
+    }
+
+    func deleteFolder(_ folder: SnippetFolder) {
+        modelContext.delete(folder)   // cascade で配下 Snippet も削除
+        save()
+    }
+
+    // MARK: - Snippet CRUD
+
+    @discardableResult
+    func addSnippet(to folder: SnippetFolder, title: String = "", content: String = "") -> Snippet {
+        let nextOrder = (folder.orderedSnippets.last?.order ?? -1) + 1
+        let snippet = Snippet(title: title, content: content, order: nextOrder)
+        snippet.folder = folder
+        modelContext.insert(snippet)
+        save()
+        return snippet
+    }
+
+    func updateSnippet(_ snippet: Snippet, title: String, content: String) {
+        snippet.title = title
+        snippet.content = content
+        save()
+    }
+
+    func setSnippetEnabled(_ snippet: Snippet, _ enabled: Bool) {
+        snippet.enabled = enabled
+        save()
+    }
+
+    func deleteSnippet(_ snippet: Snippet) {
+        modelContext.delete(snippet)
+        save()
+    }
+
+    // MARK: - Reorder（D&D 後の表示順配列を受け取り 0..n へ密連番再採番）
+
+    func reorderFolders(_ folders: [SnippetFolder]) {
+        for (i, f) in folders.enumerated() where f.order != i { f.order = i }
+        save()
+    }
+
+    func reorderSnippets(_ snippets: [Snippet]) {
+        for (i, s) in snippets.enumerated() where s.order != i { s.order = i }
+        save()
+    }
+
+    // MARK: - Private
+
+    private func save() {
+        do {
+            try modelContext.save()
+        } catch {
+            NSLog("Tameo: snippet save failed: %@", String(describing: error))
+        }
+    }
+}
