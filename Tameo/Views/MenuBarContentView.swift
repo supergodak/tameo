@@ -7,12 +7,22 @@ struct MenuBarContentView: View {
     @Environment(HistoryStore.self) private var store
     @State private var confirmClear = false
 
+    /// 履歴パレットを開く（ホットキー以外の導線。未設定なら非表示）。
+    var onOpenPalette: (() -> Void)? = nil
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Tameo")
-                .font(.headline)
-                .padding(.horizontal, 8)
-                .padding(.top, 4)
+            HStack {
+                Text("Tameo")
+                    .font(.headline)
+                Spacer()
+                if let onOpenPalette {
+                    Button("履歴を開く ⌘⇧V") { onOpenPalette() }
+                        .font(.caption)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 4)
 
             Divider()
 

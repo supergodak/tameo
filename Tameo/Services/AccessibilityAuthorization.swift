@@ -11,9 +11,9 @@ enum AccessibilityAuthorization {
         AXIsProcessTrusted()
     }
 
-    /// 未許可なら一度だけシステムの許可プロンプトを出す。
+    /// 未許可ならシステムの許可プロンプトを出す（実際の表示頻度はOSが抑制する）。
     @discardableResult
-    static func requestPromptOnce() -> Bool {
+    static func requestPrompt() -> Bool {
         let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
         let options = [key: true] as CFDictionary
         return AXIsProcessTrustedWithOptions(options)
