@@ -132,7 +132,7 @@ struct HistoryPaletteView: View {
                 Image(systemName: "doc")
                     .foregroundStyle(isSelected ? Color.white : Color.secondary)
             }
-        case .png, .tiff, .pdf:
+        case .png, .tiff:
             if let data = item.thumbnailPNG, let img = cachedImage(for: item, data: data) {
                 Image(nsImage: img).resizable().scaledToFit()
                     .clipShape(RoundedRectangle(cornerRadius: 3))
@@ -140,9 +140,12 @@ struct HistoryPaletteView: View {
                 Image(systemName: "photo")
                     .foregroundStyle(isSelected ? Color.white : Color.secondary)
             }
+        case .pdf:
+            Image(systemName: "doc.richtext")
+                .foregroundStyle(isSelected ? Color.white : Color.secondary)
         case .color:
             RoundedRectangle(cornerRadius: 3)
-                .fill(Color.gray)   // PR-C で colorHex パースに置換
+                .fill(Color(nsColor: NSColor(hexString: item.colorHex) ?? .gray))
                 .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.secondary.opacity(0.4)))
         case .url:
             Image(systemName: "link")
