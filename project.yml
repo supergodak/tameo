@@ -13,7 +13,7 @@ settings:
     MARKETING_VERSION: "0.0.1"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.0"            # TODO: 実装が安定したら Swift 6 言語モードへ
-    DEVELOPMENT_TEAM: ""           # TODO: ATIの10桁チームIDを設定（署名身元の安定 = 権限保持に必須）
+    DEVELOPMENT_TEAM: "8NY87P5TYV"  # ATI K.K. (Apple Developer Program / org)。署名身元の安定 = 権限保持に必須
     CODE_SIGN_STYLE: Automatic
     ENABLE_HARDENED_RUNTIME: YES   # notarize 前提
 
@@ -30,11 +30,14 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSUIElement: YES               # メニューバー常駐・Dockアイコン非表示
         INFOPLIST_KEY_NSHumanReadableCopyright: "© 2026 ATI Inc."
-    # --- フェーズ1で有効化（キーレイアウト処理） ---
-    # dependencies:
-    #   - package: Sauce
+    dependencies:
+      - package: Sauce             # キーレイアウト補正キーコード（CGEvent Cmd+V 合成用, M2）
+      - package: KeyboardShortcuts # グローバルホットキー（M2）
 
-# packages:
-#   Sauce:
-#     url: https://github.com/Clipy/Sauce
-#     from: "2.4.0"
+packages:
+  Sauce:
+    url: https://github.com/Clipy/Sauce
+    from: "2.4.0"
+  KeyboardShortcuts:
+    url: https://github.com/sindresorhus/KeyboardShortcuts
+    exactVersion: "3.0.1"          # 3.0.0 はリリースビルドでクラッシュするため厳密固定

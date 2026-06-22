@@ -10,13 +10,21 @@ are distributed under their own licenses. Their copyright notices are reproduced
 
 ---
 
-## Sauce — _used (Phase 1)_
+## Sauce — _used (M2), pinned 2.5.0_
 
 - Source: https://github.com/Clipy/Sauce
 - License: MIT
 - Copyright: © Clipy Project
 - Purpose: resolves keyboard key codes per active layout (QWERTY / Dvorak / JIS, etc.),
   so the synthesized ⌘V paste hits the correct physical key regardless of layout.
+
+## KeyboardShortcuts — _used (M2), pinned 3.0.1_
+
+- Source: https://github.com/sindresorhus/KeyboardShortcuts
+- License: MIT
+- Copyright: © Sindre Sorhus
+- Purpose: global hotkey registration (default ⌘⇧V) to open the history palette,
+  plus the recorder UI used later in settings (M6).
 
 ## Sparkle — _planned (Phase 3)_
 

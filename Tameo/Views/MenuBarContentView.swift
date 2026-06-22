@@ -1,45 +1,56 @@
 import SwiftUI
 import SwiftData
 
-/// メニューバーから開くポップオーバーの中身（骨組み）。
-/// 現状は履歴の一覧表示と終了のみ。検索・選択ペースト・プレビューは後続フェーズで追加する。
+/// メニューバーから開くポップオーバーの中身。
+/// 履歴一覧（`HistoryListView`）＋「履歴をクリア」＋終了。
 struct MenuBarContentView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query(sort: \ClipboardItem.createdAt, order: .reverse) private var items: [ClipboardItem]
+    @Environment(HistoryStore.self) private var store
+    @State private var confirmClear = false
+
+    /// 履歴パレットを開く（ホットキー以外の導線。未設定なら非表示）。
+    var onOpenPalette: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Tameo")
-                .font(.headline)
-                .padding(.horizontal, 8)
-                .padding(.top, 4)
-
-            Divider()
-
-            if items.isEmpty {
-                Text("履歴はまだありません")
-                    .foregroundStyle(.secondary)
-                    .padding(8)
-            } else {
-                ForEach(items) { item in
-                    Text(item.content)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
+            HStack {
+                Text("Tameo")
+                    .font(.headline)
+                Spacer()
+                if let onOpenPalette {
+                    Button("Open History  ⌘⇧V") { onOpenPalette() }
+                        .font(.caption)
                 }
             }
+            .padding(.horizontal, 8)
+            .padding(.top, 4)
 
             Divider()
 
-            Button("Tameo を終了") {
-                NSApplication.shared.terminate(nil)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    HistoryListView()
+                }
             }
-            .keyboardShortcut("q")
+            .frame(maxHeight: 360)
+
+            Divider()
+
+            HStack {
+                Button("Clear History") { confirmClear = true }
+                Spacer()
+                Button("Quit Tameo") { NSApplication.shared.terminate(nil) }
+                    .keyboardShortcut("q")
+            }
             .padding(.horizontal, 8)
             .padding(.bottom, 4)
         }
         .padding(.vertical, 4)
         .frame(width: 320)
+        .confirmationDialog("Clear all history?", isPresented: $confirmClear, titleVisibility: .visible) {
+            Button("Clear", role: .destructive) {
+                store.clearAll()
+            }
+            Button("Cancel", role: .cancel) { }
+        }
     }
 }
