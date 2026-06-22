@@ -27,7 +27,7 @@ struct HistoryPaletteView: View {
 
             if model.visibleItems.isEmpty {
                 Spacer()
-                Text("履歴はまだありません")
+                Text("No history yet")
                     .foregroundStyle(.secondary)
                 Spacer()
             } else {
@@ -45,7 +45,7 @@ struct HistoryPaletteView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Text("Tameo — 履歴")
+            Text("Tameo — History")
                 .font(.headline)
             if let range = model.displayedRange {
                 Text("\(range.lowerBound)–\(range.upperBound)")
@@ -119,7 +119,7 @@ struct HistoryPaletteView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
-            Text("←/→ 頁 · 1-0 貼付 · ↑↓ 移動 · ⏎ 確定 · esc")
+            Text("←/→ page · 1-0 paste · ↑↓ move · ⏎ select · esc")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -135,15 +135,15 @@ struct HistoryPaletteView: View {
             Image(systemName: "lock.shield")
                 .foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 2) {
-                Text("ペーストには権限が必要です")
+                Text("Accessibility permission required")
                     .font(.caption).bold()
-                Text("システム設定 > プライバシーとセキュリティ > アクセシビリティ で Tameo を許可してください。")
+                Text("Allow Tameo in System Settings ▸ Privacy & Security ▸ Accessibility.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
-            Button("開く") { onRequestAccessibility() }
+            Button("Open") { onRequestAccessibility() }
                 .font(.caption)
         }
         .padding(.horizontal, 12)

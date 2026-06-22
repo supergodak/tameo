@@ -10,7 +10,7 @@ struct HistoryListView: View {
 
     var body: some View {
         if items.isEmpty {
-            Text("履歴はまだありません")
+            Text("No history yet")
                 .foregroundStyle(.secondary)
                 .padding(8)
         } else {

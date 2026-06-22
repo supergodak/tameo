@@ -17,7 +17,7 @@ struct MenuBarContentView: View {
                     .font(.headline)
                 Spacer()
                 if let onOpenPalette {
-                    Button("履歴を開く ⌘⇧V") { onOpenPalette() }
+                    Button("Open History  ⌘⇧V") { onOpenPalette() }
                         .font(.caption)
                 }
             }
@@ -36,9 +36,9 @@ struct MenuBarContentView: View {
             Divider()
 
             HStack {
-                Button("履歴をクリア") { confirmClear = true }
+                Button("Clear History") { confirmClear = true }
                 Spacer()
-                Button("Tameo を終了") { NSApplication.shared.terminate(nil) }
+                Button("Quit Tameo") { NSApplication.shared.terminate(nil) }
                     .keyboardShortcut("q")
             }
             .padding(.horizontal, 8)
@@ -46,11 +46,11 @@ struct MenuBarContentView: View {
         }
         .padding(.vertical, 4)
         .frame(width: 320)
-        .confirmationDialog("履歴をすべて消去しますか？", isPresented: $confirmClear, titleVisibility: .visible) {
-            Button("消去", role: .destructive) {
+        .confirmationDialog("Clear all history?", isPresented: $confirmClear, titleVisibility: .visible) {
+            Button("Clear", role: .destructive) {
                 store.clearAll()
             }
-            Button("キャンセル", role: .cancel) { }
+            Button("Cancel", role: .cancel) { }
         }
     }
 }

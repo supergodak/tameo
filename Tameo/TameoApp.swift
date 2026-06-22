@@ -34,7 +34,7 @@ struct TameoApp: App {
             _panelController = State(initialValue: panelController)
             _hotKeyCenter = State(initialValue: hotKeyCenter)
         } catch {
-            fatalError("ModelContainer の生成に失敗: \(error)")
+            fatalError("Failed to create ModelContainer: \(error)")
         }
     }
 
