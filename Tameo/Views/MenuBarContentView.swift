@@ -1,11 +1,11 @@
 import SwiftUI
 import SwiftData
 
-/// メニューバーから開くポップオーバーの中身（骨組み）。
-/// 現状は履歴の一覧表示と終了のみ。検索・選択ペースト・プレビューは後続フェーズで追加する。
+/// メニューバーから開くポップオーバーの中身。
+/// 履歴一覧（`HistoryListView`）＋「履歴をクリア」＋終了。
 struct MenuBarContentView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query(sort: \ClipboardItem.createdAt, order: .reverse) private var items: [ClipboardItem]
+    @Environment(HistoryStore.self) private var store
+    @State private var confirmClear = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -16,30 +16,31 @@ struct MenuBarContentView: View {
 
             Divider()
 
-            if items.isEmpty {
-                Text("履歴はまだありません")
-                    .foregroundStyle(.secondary)
-                    .padding(8)
-            } else {
-                ForEach(items) { item in
-                    Text(item.content)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    HistoryListView()
                 }
             }
+            .frame(maxHeight: 360)
 
             Divider()
 
-            Button("Tameo を終了") {
-                NSApplication.shared.terminate(nil)
+            HStack {
+                Button("履歴をクリア") { confirmClear = true }
+                Spacer()
+                Button("Tameo を終了") { NSApplication.shared.terminate(nil) }
+                    .keyboardShortcut("q")
             }
-            .keyboardShortcut("q")
             .padding(.horizontal, 8)
             .padding(.bottom, 4)
         }
         .padding(.vertical, 4)
         .frame(width: 320)
+        .confirmationDialog("履歴をすべて消去しますか？", isPresented: $confirmClear, titleVisibility: .visible) {
+            Button("消去", role: .destructive) {
+                store.clearAll()
+            }
+            Button("キャンセル", role: .cancel) { }
+        }
     }
 }
