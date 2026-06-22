@@ -16,10 +16,10 @@ struct HistoryListView: View {
         } else {
             ForEach(items) { item in
                 Button {
-                    // 再コピー→（次tick）再ingest になるが、先に markUsed で当該項目を最新化しておくと
-                    // ingest 側の「最新と同一内容なら重複を作らず lastUsedAt 更新」に当たり重複が出ない。
-                    // この重複抑制は markUsed→ingest の順序と content 一致に依存する。
-                    paste.copyToClipboard(item.content)
+                    // 種別に応じた表現で再コピー（画像/ファイル等もここで正しく載る）。
+                    // 自己コピー抑止ゲートにより監視側は再取り込みをスキップするので、重複行は出ない。
+                    // markUsed で当該項目を最新化（先頭へ）。
+                    paste.copyToPasteboard(item)
                     store.markUsed(item)
                 } label: {
                     Text(item.content)

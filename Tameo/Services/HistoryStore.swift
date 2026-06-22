@@ -16,22 +16,48 @@ final class HistoryStore {
         self.modelContext = modelContext
     }
 
-    /// 監視側が検出したテキストを履歴へ取り込む。
-    func ingest(text: String, sourceBundleID: String?, isConcealed: Bool) {
-        guard !isConcealed else { return }
-        guard !text.isEmpty else { return }
+    /// 監視側が組み立てた捕捉ペイロードを履歴へ取り込む（全種別共通の入口）。
+    /// 重複判定は `contentHash` で行う（テキストの文字列一致を全種別へ一般化したもの）。
+    func ingest(_ payload: CapturedPayload) {
+        guard !payload.isConcealed else { return }
+        guard payload.byteSize > 0 else { return }
 
-        // 直近（最新）と同一内容なら、重複を作らず最終使用日時だけ更新。
-        if let newest = newestItem(), newest.content == text {
-            newest.lastUsedAt = .now
-            save()
-            return
+        let hash = ContentHash.sha256Hex(payload.canonicalBytes)
+
+        if let newest = newestItem() {
+            // レガシ行（M3 前）は contentHash が空。比較前に一度だけ補完する
+            // （アップグレード後の初回再コピーで重複が出るのを全移行なしで防ぐ）。
+            if newest.contentHash.isEmpty {
+                newest.contentHash = ContentHash.sha256Hex(canonicalBytes(of: newest))
+            }
+            // 種別が一致し、かつ内容ハッシュも一致するときだけ重複とみなす。
+            // 同じパス文字列でも「テキスト行」と「実ファイルの filename 行」は別物として扱い、
+            // ハッシュ衝突で filename 捕捉（アイコン/ファイル参照）を取りこぼさない。
+            if newest.kindRaw == payload.kind.rawValue, newest.contentHash == hash {
+                newest.lastUsedAt = .now
+                save()
+                return
+            }
         }
 
-        let item = ClipboardItem(content: text, sourceBundleID: sourceBundleID)
+        let item = ClipboardItem(payload: payload, contentHash: hash)
         modelContext.insert(item)
         prune()
         save()
+    }
+
+    /// 既存テキスト経路は薄いラッパとして温存（呼び出し側はバイト等価）。
+    func ingest(text: String, sourceBundleID: String?, isConcealed: Bool) {
+        guard !isConcealed, !text.isEmpty else { return }
+        ingest(CapturedPayload.text(text, source: sourceBundleID))
+    }
+
+    /// 既存行の重複排除キー入力バイト（backfill 用）。binary は payloadData、無ければ thumbnailPNG、最後に content。
+    private func canonicalBytes(of item: ClipboardItem) -> Data {
+        if item.kind.hasBinaryPayload {
+            return item.payloadData ?? item.thumbnailPNG ?? Data(item.content.utf8)
+        }
+        return Data(item.content.utf8)
     }
 
     /// 既存項目を「今使った」ことにして先頭へ（M2のペースト後移動でも使用）。
@@ -60,8 +86,11 @@ final class HistoryStore {
     }
 
     private func prune() {
+        // まず件数だけを問い合わせ、上限以下なら全件フェッチを避ける（O(n) 全スキャン回避）。
+        let total = (try? modelContext.fetchCount(FetchDescriptor<ClipboardItem>())) ?? 0
+        guard total > maxHistory else { return }
         let d = FetchDescriptor<ClipboardItem>(sortBy: [SortDescriptor(\.lastUsedAt, order: .reverse)])
-        guard let items = try? modelContext.fetch(d), items.count > maxHistory else { return }
+        guard let items = try? modelContext.fetch(d) else { return }
         for item in items[maxHistory...] {
             modelContext.delete(item)
         }

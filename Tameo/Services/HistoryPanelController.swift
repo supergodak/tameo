@@ -238,7 +238,7 @@ final class HistoryPanelController {
     private func commit(_ item: ClipboardItem) {
         hide()
         store.markUsed(item)
-        paste.paste(item.content, to: targetApp)
+        paste.paste(item, asPlainText: false, to: targetApp)
     }
 
     /// バナーの「開く」：権限プロンプト → 未許可なら設定画面へ誘導。
