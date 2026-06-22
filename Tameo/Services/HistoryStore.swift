@@ -69,8 +69,11 @@ final class HistoryStore {
     /// 全履歴を消去（メニューの「履歴をクリア」用）。
     /// 書き込み（insert/delete/save）は本クラスに一本化する設計のため、View直叩きではなくここを呼ぶ。
     func clearAll() {
+        // batch delete（delete(model:)）は externalStorage の sidecar を消さず、画像原本ファイルが孤児化する。
+        // オブジェクト単位で削除して per-object のクリーンアップ（sidecar 削除）を走らせる。
         do {
-            try modelContext.delete(model: ClipboardItem.self)
+            let items = try modelContext.fetch(FetchDescriptor<ClipboardItem>())
+            for item in items { modelContext.delete(item) }
             try modelContext.save()
         } catch {
             NSLog("Tameo: clear all failed: %@", String(describing: error))
