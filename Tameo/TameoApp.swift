@@ -17,11 +17,13 @@ struct TameoApp: App {
         do {
             let container = try ModelContainer(for: ClipboardItem.self)
             let store = HistoryStore(modelContext: container.mainContext)
-            let monitor = ClipboardMonitor(store: store)
+            // 自己コピー抑止ゲートを監視とペーストで共有（貼り戻し由来の重複行を防ぐ）。
+            let gate = PasteboardWriteGate()
+            let monitor = ClipboardMonitor(store: store, gate: gate)
             // 起動と同時に監視開始（メニューを開く前から履歴を溜める）。
             monitor.start()
 
-            let paste = PasteService()
+            let paste = PasteService(gate: gate)
             let panelController = HistoryPanelController(modelContainer: container, store: store, paste: paste)
             // ホットキー登録は起動時に一度だけ（view body 内では行わない）。
             let hotKeyCenter = HotKeyCenter(onShowHistory: { panelController.toggle() })

@@ -9,36 +9,41 @@ import Sauce
 /// 書き込み・CGEvent送出は内容読みではないため macOS 15.4/26 のペーストボード・プライバシー警告は出ない。
 @MainActor
 protocol PasteServicing {
-    func copyToClipboard(_ text: String)
-    func paste(_ text: String, to target: NSRunningApplication?)
+    func copyToPasteboard(_ item: ClipboardItem)
+    func copyAsPlainText(_ item: ClipboardItem)
+    func paste(_ item: ClipboardItem, asPlainText: Bool, to target: NSRunningApplication?)
 }
 
 @MainActor
 @Observable
 final class PasteService: PasteServicing {
-    /// 選択テキストを汎用ペーストボードへ書き込むだけ（合成ペーストはしない）。
-    func copyToClipboard(_ text: String) {
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.setString(text, forType: .string)
+    /// 自己コピー抑止ゲート（書き込み直後に changeCount を記録し、監視側の再取り込みを止める）。
+    private let gate: PasteboardWriteGate
+
+    init(gate: PasteboardWriteGate) {
+        self.gate = gate
     }
 
-    /// 選択テキストを `target`（ホットキー発火時に捕捉した前面アプリ）へ貼り付ける。
-    func paste(_ text: String, to target: NSRunningApplication?) {
-        guard !text.isEmpty else { return }
+    /// 選択項目を種別に応じて汎用ペーストボードへ書き込むだけ（合成ペーストはしない）。
+    func copyToPasteboard(_ item: ClipboardItem) {
+        _ = writeToPasteboard(item, asPlainText: false)
+    }
 
-        // 1) ペーストボードへ書込。changeCount の増加で反映を確認（整数読みなので警告は出ない）。
-        let pb = NSPasteboard.general
-        let before = pb.changeCount
-        pb.clearContents()
-        pb.setString(text, forType: .string)
-        guard pb.changeCount != before else {
+    /// 選択項目をプレーンテキストとして書き込む（リッチ装飾を捨てる。Clipy の「プレーンで貼付」相当）。
+    func copyAsPlainText(_ item: ClipboardItem) {
+        _ = writeToPasteboard(item, asPlainText: true)
+    }
+
+    /// 選択項目を `target`（ホットキー発火時に捕捉した前面アプリ）へ貼り付ける。
+    func paste(_ item: ClipboardItem, asPlainText: Bool, to target: NSRunningApplication?) {
+        // 1) ペーストボードへ書込（種別別）。未コミットなら合成キーを送らない。
+        guard writeToPasteboard(item, asPlainText: asPlainText) else {
             NSLog("Tameo: pasteboard write did not commit; abort paste")
             return
         }
 
         // 2) 貼り付け対象が取れていない場合は合成キーを送らない（誤爆防止）。
-        //    テキストは既にペーストボードへ載っているので、ユーザーが手動で貼り付け可能。
+        //    内容は既にペーストボードへ載っているので、ユーザーが手動で貼り付け可能。
         guard let target else { return }
 
         // 3) アクセシビリティ未許可なら合成キーは送れない。プロンプト後も未許可なら設定画面へ誘導。
@@ -58,6 +63,42 @@ final class PasteService: PasteServicing {
 
         // フォーカスが対象へ実際に戻ってから送出（固定遅延より堅牢。最大 ~0.24s でタイムアウト送出）。
         Self.postCommandV(virtualKey: vKey, whenFrontmost: target, attemptsLeft: 8)
+    }
+
+    /// 種別別にペーストボードへ書き込む。書き込み後の changeCount を gate へ記録（自己コピー抑止）。
+    /// 戻り値 = コミットされたか（changeCount が増えたか）。
+    @discardableResult
+    private func writeToPasteboard(_ item: ClipboardItem, asPlainText: Bool) -> Bool {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+
+        if asPlainText {
+            pb.setString(plainText(for: item), forType: .string)
+        } else {
+            switch item.kind {
+            case .filename:
+                // 既定はパス文字列（ターミナル/エディタ向け）。実ファイル参照も併載し Finder では複製可能に。
+                let objects: [NSPasteboardWriting] = (item.fileURLs as [NSURL]) + [item.content as NSString]
+                pb.writeObjects(objects)
+            case .text, .url, .color:
+                pb.setString(item.content, forType: .string)
+            case .png, .tiff, .rtf, .rtfd, .pdf:
+                // PR-B/C で原本バイナリを書く。現状はテキスト表現があれば貼る。
+                pb.setString(item.content, forType: .string)
+            }
+        }
+
+        // clearContents() 自体が changeCount を進めるため「増えたか」では実書込を判定できない。
+        // 書き込まれた型の有無で実コミットを判定する（filename で URL/文字列とも空なら未コミット）。
+        let committed = (pb.types?.isEmpty == false)
+        if committed { gate.noteSelfWrite(changeCount: pb.changeCount) }
+        return committed
+    }
+
+    /// プレーン貼付時の文字列。PR-A は content がそのまま平文
+    /// （rtf 等の平文化は PR-C で content に格納済みのものを使う）。
+    private func plainText(for item: ClipboardItem) -> String {
+        item.content
     }
 
     /// 対象アプリが前面に戻るのを待ってから Cmd+V を送出する（タイムアウトで強制送出）。

@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import AppKit
 
 /// ホットキーで開くフローティング・パレット（Decade Pager）。
 /// 1ページ=10件(decade)を固定高で表示。操作:
@@ -78,6 +79,11 @@ struct HistoryPaletteView: View {
         .transition(.opacity)
     }
 
+    /// 行内容の固定高（全種別で揃え、10 行が固定ページ・440pt に必ず収まることを構造的に保証）。
+    private static let rowContentHeight: CGFloat = 20
+    /// 種別アイコンの固定枠（≤ rowContentHeight で行高を崩さない）。
+    private static let leadingSize: CGFloat = 18
+
     private func row(index: Int, item: ClipboardItem) -> some View {
         let isSelected = (model.clampedRow == index)
         let badge = index == 9 ? "0" : "\(index + 1)"   // 0 = 10行目
@@ -90,18 +96,60 @@ struct HistoryPaletteView: View {
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
                     .frame(width: 16, alignment: .trailing)
+                // text は先頭アイコンなし＝M2 と同一外観。非テキストのみ固定枠のアイコンを差し込む。
+                if item.kind != .text {
+                    leadingSlot(for: item, isSelected: isSelected)
+                        .frame(width: Self.leadingSize, height: Self.leadingSize)
+                        .clipped()
+                }
                 Text(item.content)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .foregroundStyle(isSelected ? Color.white : Color.primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(height: Self.rowContentHeight)
             .contentShape(Rectangle())
             .padding(.horizontal, 8)
-            .padding(.vertical, 5)
+            .padding(.vertical, 4)
             .background(isSelected ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 5))
         }
         .buttonStyle(.plain)
+    }
+
+    /// 種別ごとの先頭アイコン（固定枠。`.text` は呼ばれない＝M2 と同一外観を維持）。
+    /// filename はファイルアイコン（取り込み時に解決済の thumbnailPNG）。画像/色等は PR-B/C で本実装。
+    @ViewBuilder
+    private func leadingSlot(for item: ClipboardItem, isSelected: Bool) -> some View {
+        switch item.kind {
+        case .filename:
+            if let data = item.thumbnailPNG, let img = NSImage(data: data) {
+                Image(nsImage: img).resizable().scaledToFit()
+            } else {
+                Image(systemName: "doc")
+                    .foregroundStyle(isSelected ? Color.white : Color.secondary)
+            }
+        case .png, .tiff, .pdf:
+            if let data = item.thumbnailPNG, let img = NSImage(data: data) {
+                Image(nsImage: img).resizable().scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            } else {
+                Image(systemName: "photo")
+                    .foregroundStyle(isSelected ? Color.white : Color.secondary)
+            }
+        case .color:
+            RoundedRectangle(cornerRadius: 3)
+                .fill(Color.gray)   // PR-C で colorHex パースに置換
+                .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.secondary.opacity(0.4)))
+        case .url:
+            Image(systemName: "link")
+                .foregroundStyle(isSelected ? Color.white : Color.secondary)
+        case .rtf, .rtfd:
+            Image(systemName: "textformat")
+                .foregroundStyle(isSelected ? Color.white : Color.secondary)
+        case .text:
+            EmptyView()
+        }
     }
 
     // MARK: - Footer（ドット rail ＋ 位置 ＋ キー凡例）
