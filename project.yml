@@ -1,0 +1,40 @@
+# XcodeGen spec — generate the Xcode project with:  xcodegen generate
+# We keep this declarative spec under version control instead of a .xcodeproj.
+name: Tameo
+
+options:
+  bundleIdPrefix: com.ati          # TODO: ATIの正式な逆ドメインに要確定（第7章: 配布ドメイン未決）
+  deploymentTarget:
+    macOS: "14.0"                   # SwiftData の下限。13へ下げる場合は SwiftData 非依存化が必要
+  createIntermediateGroups: true
+
+settings:
+  base:
+    MARKETING_VERSION: "0.0.1"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"            # TODO: 実装が安定したら Swift 6 言語モードへ
+    DEVELOPMENT_TEAM: ""           # TODO: ATIの10桁チームIDを設定（署名身元の安定 = 権限保持に必須）
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_HARDENED_RUNTIME: YES   # notarize 前提
+
+targets:
+  Tameo:
+    type: application
+    platform: macOS
+    sources:
+      - Tameo
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ati.tameo     # TODO: ドメイン確定後に更新
+        PRODUCT_NAME: Tameo
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_LSUIElement: YES               # メニューバー常駐・Dockアイコン非表示
+        INFOPLIST_KEY_NSHumanReadableCopyright: "© 2026 ATI Inc."
+    # --- フェーズ1で有効化（キーレイアウト処理） ---
+    # dependencies:
+    #   - package: Sauce
+
+# packages:
+#   Sauce:
+#     url: https://github.com/Clipy/Sauce
+#     from: "2.4.0"
