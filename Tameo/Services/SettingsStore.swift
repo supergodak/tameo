@@ -1,32 +1,88 @@
 import Foundation
 import Observation
+import ServiceManagement
+
+/// 履歴の並び順。
+enum HistorySortOrder: String, CaseIterable {
+    case lastUsed    // 最終使用日時
+    case createdAt   // 作成日時
+}
 
 /// アプリのスカラ設定の単一の真実源。スニペット本体は SwiftData（`SnippetStore`）が持ち、ここには載せない。
 ///
-/// 方針: `@Observable` で UI へ反映しつつ、各プロパティの `didSet` で `UserDefaults` へ手書き永続化する。
-/// `@AppStorage` を `@Observable` のプロパティへ直付けすると反映／ビルドの不整合が起きるため避ける
-/// （ストア横断の参照を 1 経路に保つ）。ホットキーは `KeyboardShortcuts` が独自に `UserDefaults` 永続化
-/// するため、ここでは二重管理しない。
-///
-/// S1 では `maxHistory` のみ（設定の器）。General/Types/Shortcuts/ExcludeApp の各ノブは S4 で同パターンで追加する。
+/// 方針: `@Observable` で UI へ反映しつつ、各プロパティの `didSet` で `UserDefaults` へ手書き永続化する
+/// （`@AppStorage` を `@Observable` のプロパティへ直付けすると反映／ビルドの不整合が起きるため避ける）。
+/// ホットキーは `KeyboardShortcuts` が独自に `UserDefaults` 永続化するため、ここでは二重管理しない。
+/// 各値は消費側（`HistoryStore` / `PasteService` / `HistoryPanelController`）へ本ストアを注入して参照する。
 @MainActor
 @Observable
 final class SettingsStore {
     private let defaults: UserDefaults
 
-    /// 記憶する履歴数（既定 200）。`HistoryStore.maxHistory` /`HistoryPanelController.maxItems` の真実源。
-    /// S1 では永続化のみ。`HistoryStore` への反映配線は S4（General タブと同時）で行う。
+    /// 記憶する履歴数（既定 200）。`HistoryStore.prune` とパレットのスナップショット件数の真実源。
     var maxHistory: Int {
         didSet { defaults.set(maxHistory, forKey: Keys.maxHistory) }
     }
 
+    /// 履歴の並び順（既定: 最終使用日時）。`HistoryPanelController.fetchTopItems` のソートに反映。
+    var sortOrder: HistorySortOrder {
+        didSet { defaults.set(sortOrder.rawValue, forKey: Keys.sortOrder) }
+    }
+
+    /// 選択後に ⌘V を自動入力する（既定 true）。false なら書き込みのみで、貼り付けはユーザーが手動で行う。
+    var inputPasteCommand: Bool {
+        didSet { defaults.set(inputPasteCommand, forKey: Keys.inputPasteCommand) }
+    }
+
+    /// ログイン時に起動（`SMAppService` 連動。UserDefaults ではなくシステムの登録状態が真実源）。
+    var launchAtLogin: Bool {
+        didSet {
+            guard !isSyncingLaunchAtLogin else { return }
+            applyLaunchAtLogin(launchAtLogin)
+        }
+    }
+    /// 再同期時の自己代入が didSet を再帰させないためのガード。
+    private var isSyncingLaunchAtLogin = false
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        // 未設定なら既定値。init 内の代入は didSet を発火しない（不要な書き戻しを避ける）。
+        // 未設定なら既定値。init 内の代入は didSet を発火しない（不要な書き戻し／副作用を避ける）。
         self.maxHistory = (defaults.object(forKey: Keys.maxHistory) as? Int) ?? 200
+        self.sortOrder = HistorySortOrder(rawValue: defaults.string(forKey: Keys.sortOrder) ?? "") ?? .lastUsed
+        self.inputPasteCommand = (defaults.object(forKey: Keys.inputPasteCommand) as? Bool) ?? true
+        // ログイン項目は OS の登録状態を初期値に（.requiresApproval も実質有効として扱う。UserDefaults とは独立）。
+        self.launchAtLogin = Self.isEffectivelyEnabled(SMAppService.mainApp.status)
+    }
+
+    /// ログイン項目の登録/解除を OS へ反映し、実状態へ再同期する。
+    /// 失敗してもクラッシュさせずログのみ。失敗時はトグルを OS の実状態へ戻し「表示の嘘」を防ぐ。
+    private func applyLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            NSLog("Tameo: launch-at-login toggle failed: %@", String(describing: error))
+        }
+        // OS の実状態へ寄せる（失敗時の乖離・承認待ちを反映。自己代入は再帰ガードで保護）。
+        let synced = Self.isEffectivelyEnabled(SMAppService.mainApp.status)
+        if launchAtLogin != synced {
+            isSyncingLaunchAtLogin = true
+            launchAtLogin = synced
+            isSyncingLaunchAtLogin = false
+        }
+    }
+
+    /// `.enabled` と `.requiresApproval`（システム設定で承認すれば有効）を「実質有効」とみなす。
+    private static func isEffectivelyEnabled(_ status: SMAppService.Status) -> Bool {
+        status == .enabled || status == .requiresApproval
     }
 
     private enum Keys {
         static let maxHistory = "tameo.maxHistory"
+        static let sortOrder = "tameo.sortOrder"
+        static let inputPasteCommand = "tameo.inputPasteCommand"
     }
 }

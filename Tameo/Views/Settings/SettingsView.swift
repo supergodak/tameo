@@ -6,6 +6,8 @@ import SwiftUI
 struct SettingsView: View {
     var body: some View {
         TabView {
+            GeneralSettingsTab()
+                .tabItem { Label("General", systemImage: "gearshape") }
             SnippetsSettingsTab()
                 .tabItem { Label("Snippets", systemImage: "text.quote") }
         }

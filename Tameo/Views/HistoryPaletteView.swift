@@ -226,7 +226,8 @@ struct HistoryPaletteView: View {
     private var footer: some View {
         VStack(spacing: 4) {
             HStack(spacing: 6) {
-                ForEach(Array(0..<model.pageCount), id: \.self) { i in
+                // ドット rail は安全のため最大 10 個に抑える（パレットは 10 ページ上限だが将来の変更にも耐える）。
+                ForEach(Array(0..<min(model.pageCount, 10)), id: \.self) { i in
                     Circle()
                         .fill(i == model.pageIndex ? Color.accentColor : Color.secondary.opacity(0.35))
                         .frame(width: 6, height: 6)
