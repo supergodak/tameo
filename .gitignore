@@ -47,3 +47,6 @@ eddsa_priv
 # Misc
 *.log
 *.tmp
+
+# 社内の開発引き継ぎ資料（公開リポジトリには含めない）
+CLAUDE.md

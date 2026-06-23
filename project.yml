@@ -3,7 +3,7 @@
 name: Tameo
 
 options:
-  bundleIdPrefix: com.ati          # TODO: ATIの正式な逆ドメインに要確定（第7章: 配布ドメイン未決）
+  bundleIdPrefix: jp.co.ati-mirai  # ati-mirai.co.jp の逆ドメイン（配布ドメイン tameo.ati-mirai.co.jp に整合）
   deploymentTarget:
     macOS: "14.0"                   # SwiftData の下限。13へ下げる場合は SwiftData 非依存化が必要
   createIntermediateGroups: true
@@ -25,7 +25,7 @@ targets:
       - Tameo
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.ati.tameo     # TODO: ドメイン確定後に更新
+        PRODUCT_BUNDLE_IDENTIFIER: jp.co.ati-mirai.tameo   # 確定（ati-mirai.co.jp の逆ドメイン）
         PRODUCT_NAME: Tameo
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSUIElement: YES               # メニューバー常駐・Dockアイコン非表示
