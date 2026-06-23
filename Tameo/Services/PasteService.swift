@@ -12,6 +12,8 @@ protocol PasteServicing {
     func copyToPasteboard(_ item: ClipboardItem)
     func copyAsPlainText(_ item: ClipboardItem)
     func paste(_ item: ClipboardItem, asPlainText: Bool, to target: NSRunningApplication?)
+    /// スニペット等の生テキストを貼り付ける（履歴項目ではない経路）。
+    func pasteText(_ text: String, to target: NSRunningApplication?)
 }
 
 @MainActor
@@ -41,12 +43,30 @@ final class PasteService: PasteServicing {
             NSLog("Tameo: pasteboard write did not commit; abort paste")
             return
         }
-
         // 2) 貼り付け対象が取れていない場合は合成キーを送らない（誤爆防止）。
         //    内容は既にペーストボードへ載っているので、ユーザーが手動で貼り付け可能。
         guard let target else { return }
+        synthesizePasteCommand(to: target)
+    }
 
-        // 3) アクセシビリティ未許可なら合成キーは送れない。プロンプト後も未許可なら設定画面へ誘導。
+    /// スニペット等の生テキストを貼り付ける（履歴項目ではない経路）。
+    /// 書き込み後に gate へ changeCount を記録するため、監視は自己コピーをスキップし履歴を汚染しない。
+    func pasteText(_ text: String, to target: NSRunningApplication?) {
+        // 空テキストは何もしない。clearContents でユーザーの現在のクリップボードを消さないため
+        //（本文が空のスニペットを選んでもクリップボードを破壊しない）。
+        guard !text.isEmpty else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        guard pb.types?.isEmpty == false else { return }
+        gate.noteSelfWrite(changeCount: pb.changeCount)
+        guard let target else { return }
+        synthesizePasteCommand(to: target)
+    }
+
+    /// ペーストボード書込済みの内容を `target` へ合成 Cmd+V で送る共通処理。
+    private func synthesizePasteCommand(to target: NSRunningApplication) {
+        // アクセシビリティ未許可なら合成キーは送れない。プロンプト後も未許可なら設定画面へ誘導。
         guard AccessibilityAuthorization.isTrusted else {
             AccessibilityAuthorization.requestPrompt()
             if !AccessibilityAuthorization.isTrusted {
@@ -54,13 +74,10 @@ final class PasteService: PasteServicing {
             }
             return
         }
-
-        // 4) 合成 Cmd+V は前面アプリへ届くため、対象アプリを前面へ戻す。
+        // 合成 Cmd+V は前面アプリへ届くため、対象アプリを前面へ戻す。
         target.activate()
-
-        // 5) レイアウト補正済みの V キーコードを Sauce から取得（手動QWERTYゲートは書かない）。
+        // レイアウト補正済みの V キーコードを Sauce から取得（手動QWERTYゲートは書かない）。
         let vKey = Sauce.shared.keyCode(for: .v)
-
         // フォーカスが対象へ実際に戻ってから送出（固定遅延より堅牢。最大 ~0.24s でタイムアウト送出）。
         Self.postCommandV(virtualKey: vKey, whenFrontmost: target, attemptsLeft: 8)
     }
