@@ -99,7 +99,7 @@ struct HistoryPaletteView: View {
     /// フッターのキー凡例（ソース別。→＝入る／←＝出る を文脈で出し分け）。
     private var legend: String {
         switch model.source {
-        case .history: return "⇥ Snippets · ←/→ page · 1-0 paste · ↑↓ move · esc"
+        case .history: return "⇥ Snippets · 1-0 paste · ⌥# plain · ←/→ page · esc"
         case .snippetFolders: return "→ open · 1-0 open · ⇥ History · ↑↓ move · esc"
         case .snippetItems: return "← back · 1-0 paste · ↑↓ move · esc"
         }

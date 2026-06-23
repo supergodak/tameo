@@ -269,7 +269,7 @@ final class HistoryPanelController {
         case 123: handleLeftArrow(); return true                                  // ← : 出る or ページ送り（前）
         case 124: handleRightArrow(); return true                                 // → : 入る or ページ送り（次）
         case 48: animated { switchSource() }; return true                         // ⇥ : History ⇄ Snippets
-        case 36, 76: commitSelected(); return true                                // return / keypad enter
+        case 36, 76: commitSelected(asPlainText: event.modifierFlags.contains(.option)); return true  // ⏎（⌥=平文）
         default: break
         }
 
@@ -283,6 +283,15 @@ final class HistoryPanelController {
             let target = digit == 0 ? 9 : digit - 1
             if target < model.pageCount {
                 animated { model.goToPage(target) }
+            }
+            return true
+        }
+        if mods == .option {
+            // ⌥+数字: 平文で貼り付け（リッチ装飾を捨てる）。⇧等の誤爆を避けるため厳密一致で判定。
+            let row = digit == 0 ? 9 : digit - 1
+            if row < model.pageItems.count {
+                model.rowInPage = row
+                commitSelected(asPlainText: true)
             }
             return true
         }
@@ -300,23 +309,24 @@ final class HistoryPanelController {
 
     // MARK: - Private
 
-    private func commitSelected() {
+    private func commitSelected(asPlainText: Bool = false) {
         guard let row = model.selectedRow else { return }
-        commit(row)
+        commit(row, asPlainText: asPlainText)
     }
 
     /// 選択確定：履歴/スニペットは貼り付けて閉じ、フォルダは中へ入る（閉じない）。
-    private func commit(_ row: PaletteRow) {
+    /// `asPlainText`=true（⌥）はリッチ装飾を捨てて平文で貼る（履歴の RTF/RTFD 等向け）。
+    private func commit(_ row: PaletteRow, asPlainText: Bool = false) {
         switch row {
         case .folder(let folder):
             animated { enterFolder(folder) }
         case .history(let item):
             hide()
             store.markUsed(item)
-            paste.paste(item, asPlainText: false, to: targetApp)
+            paste.paste(item, asPlainText: asPlainText, to: targetApp)
         case .snippet(let snippet):
             hide()
-            // スニペット本文を貼り付け（pasteText は gate を通すので履歴を汚染しない）。
+            // スニペット本文は元から平文。pasteText は gate を通すので履歴を汚染しない。
             paste.pasteText(snippet.content, to: targetApp)
         }
     }
