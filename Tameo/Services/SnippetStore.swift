@@ -114,6 +114,35 @@ final class SnippetStore {
         return (folderCount, snippetCount)
     }
 
+    // MARK: - Export（Clipy 互換 XML 書き出し。往復可能）
+
+    /// 全フォルダ／スニペットを Clipy のスニペット XML 形式で書き出す（`ClipySnippetImporter` と往復可能）。
+    func exportClipyXML() -> String {
+        // XML 1.0 で不正な制御文字（タブ/改行/復帰 以外の C0）を落としてから &<> をエンティティ化する。
+        // これを欠くと、ターミナル出力等の制御文字を含む本文を書き出した XML が importer で全件パース失敗する。
+        func esc(_ s: String) -> String {
+            let cleaned = String(s.unicodeScalars.filter {
+                $0.value == 0x9 || $0.value == 0xA || $0.value == 0xD || $0.value >= 0x20
+            })
+            return cleaned
+                .replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+        }
+        var xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<folders>\n"
+        for folder in allFolders() {
+            // enable 属性を出力して往復で有効/無効フラグを保持する（importer は属性欠如を true 扱い）。
+            xml += "  <folder enable=\"\(folder.enabled)\">\n    <title>\(esc(folder.title))</title>\n    <snippets>\n"
+            for snippet in folder.orderedSnippets {
+                xml += "      <snippet enable=\"\(snippet.enabled)\">\n        <title>\(esc(snippet.title))</title>\n"
+                xml += "        <content>\(esc(snippet.content))</content>\n      </snippet>\n"
+            }
+            xml += "    </snippets>\n  </folder>\n"
+        }
+        xml += "</folders>\n"
+        return xml
+    }
+
     /// タイトル未設定スニペットの表示名を本文の最初の非空行から導出（最大40文字）。
     /// 先頭が空行でも、その下に実テキストがあればそれを採用する。
     private static func deriveTitle(from content: String) -> String {

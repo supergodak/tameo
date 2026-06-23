@@ -81,6 +81,10 @@ final class ClipboardMonitor {
         // 助言用のコピー元（concealed 判定には使わない／ペーストボードは読まない）。
         let source = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
 
+        // 除外アプリが前面のときは取り込まない（内容を読む前に弾く）。bundle id の比較のみで中身は読まない。
+        // source=nil（前面不明/bundle id 無し）は突き合わせ不能のため取り込む（従来どおり）。機密遮断は上の ConcealedType ゲートが担当。
+        if let source, settings.excludedBundleIDs.contains(source) { return }
+
         // ==== Tameo の背景経路で内容を読む唯一の箇所 ====
         // まず型集合（中身を読まない）で種別を判定し、勝った型だけを 1 回読む。
         var allTypes = Set<NSPasteboard.PasteboardType>()

@@ -27,7 +27,7 @@ struct SnippetsSettingsTab: View {
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .alert("Import from Clipy", isPresented: $showImportResult) {
+        .alert("Snippets", isPresented: $showImportResult) {
             Button("OK", role: .cancel) { }
         } message: {
             Text(importMessage ?? "")
@@ -71,8 +71,16 @@ struct SnippetsSettingsTab: View {
             Button { addSnippet() } label: { Image(systemName: "plus") }
                 .help("New Snippet")
                 .disabled(targetFolderForNewSnippet == nil)
-            Button { importFromClipy() } label: { Image(systemName: "square.and.arrow.down") }
-                .help("Import snippets from a Clipy XML export…")
+            Menu {
+                Button("Import from Clipy…") { importFromClipy() }
+                Button("Export snippets…") { exportSnippets() }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 28)
+            .help("Import / Export snippets…")
             Spacer()
             Button { moveSelection(by: -1) } label: { Image(systemName: "chevron.up") }
                 .help("Move Up")
@@ -156,6 +164,23 @@ struct SnippetsSettingsTab: View {
             importMessage = "Added \(result.folders) folder(s) and \(result.snippets) snippet(s). Existing snippets were kept."
         } catch {
             importMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+        showImportResult = true
+    }
+
+    /// 全スニペットを Clipy 互換 XML で書き出す（`importFromClipy` と往復可能）。
+    private func exportSnippets() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.xml]
+        panel.nameFieldStringValue = "snippets.xml"
+        panel.message = "Export all snippets as Clipy-compatible XML"
+        NSApp.activate()
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try store.exportClipyXML().write(to: url, atomically: true, encoding: .utf8)
+            importMessage = "Exported snippets to \(url.lastPathComponent)."
+        } catch {
+            importMessage = "Export failed: \(error.localizedDescription)"
         }
         showImportResult = true
     }

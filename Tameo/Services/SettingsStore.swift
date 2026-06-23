@@ -46,6 +46,11 @@ final class SettingsStore {
     /// 機密マーク付き（パスワードマネージャ等の ConcealedType）を履歴に残さない（既定 true）。
     var ignoreConcealed: Bool { didSet { defaults.set(ignoreConcealed, forKey: Keys.ignoreConcealed) } }
 
+    /// 除外アプリの bundle id 群。これらが前面のときコピーした内容は履歴に残さない（既定: 空）。
+    var excludedBundleIDs: [String] {
+        didSet { defaults.set(excludedBundleIDs, forKey: Keys.excludedBundleIDs) }
+    }
+
     /// ログイン時に起動（`SMAppService` 連動。UserDefaults ではなくシステムの登録状態が真実源）。
     var launchAtLogin: Bool {
         didSet {
@@ -70,6 +75,7 @@ final class SettingsStore {
         self.storeURL = (defaults.object(forKey: Keys.storeURL) as? Bool) ?? true
         self.storeColor = (defaults.object(forKey: Keys.storeColor) as? Bool) ?? true
         self.ignoreConcealed = (defaults.object(forKey: Keys.ignoreConcealed) as? Bool) ?? true
+        self.excludedBundleIDs = defaults.stringArray(forKey: Keys.excludedBundleIDs) ?? []
         // ログイン項目は OS の登録状態を初期値に（.requiresApproval も実質有効として扱う。UserDefaults とは独立）。
         self.launchAtLogin = Self.isEffectivelyEnabled(SMAppService.mainApp.status)
     }
@@ -125,5 +131,6 @@ final class SettingsStore {
         static let storeURL = "tameo.store.url"
         static let storeColor = "tameo.store.color"
         static let ignoreConcealed = "tameo.ignoreConcealed"
+        static let excludedBundleIDs = "tameo.excludedBundleIDs"
     }
 }
