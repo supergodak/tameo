@@ -21,6 +21,8 @@ struct TameoApp: App {
             // 既存 ClipboardItem データはエンティティ追加だけで無傷（lightweight migration）。
             let container = try ModelContainer(for: ClipboardItem.self, SnippetFolder.self, Snippet.self)
             let store = HistoryStore(modelContext: container.mainContext)
+            // スニペットの書き込み主体（HistoryStore と同じ mainContext を共有）。パレットにも渡す。
+            let snippetStore = SnippetStore(modelContext: container.mainContext)
             // 自己コピー抑止ゲートを監視とペーストで共有（貼り戻し由来の重複行を防ぐ）。
             let gate = PasteboardWriteGate()
             let monitor = ClipboardMonitor(store: store, gate: gate)
@@ -28,9 +30,13 @@ struct TameoApp: App {
             monitor.start()
 
             let paste = PasteService(gate: gate)
-            let panelController = HistoryPanelController(modelContainer: container, store: store, paste: paste)
-            // ホットキー登録は起動時に一度だけ（view body 内では行わない）。
-            let hotKeyCenter = HotKeyCenter(onShowHistory: { panelController.toggle() })
+            let panelController = HistoryPanelController(
+                modelContainer: container, store: store, snippetStore: snippetStore, paste: paste)
+            // ホットキー登録は起動時に一度だけ（view body 内では行わない）。⌘⇧V=履歴 / ⌘⇧B=スニペット。
+            let hotKeyCenter = HotKeyCenter(
+                onShowHistory: { panelController.toggle() },
+                onShowSnippets: { panelController.toggleSnippets() }
+            )
 
             self.modelContainer = container
             _store = State(initialValue: store)
@@ -40,8 +46,7 @@ struct TameoApp: App {
             _panelController = State(initialValue: panelController)
             _hotKeyCenter = State(initialValue: hotKeyCenter)
             _settings = State(initialValue: SettingsStore())
-            // スニペットの書き込み主体（HistoryStore と同じ mainContext を共有）。
-            _snippetStore = State(initialValue: SnippetStore(modelContext: container.mainContext))
+            _snippetStore = State(initialValue: snippetStore)
         } catch {
             fatalError("Failed to create ModelContainer: \(error)")
         }

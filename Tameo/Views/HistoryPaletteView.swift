@@ -3,15 +3,16 @@ import SwiftData
 import AppKit
 
 /// ホットキーで開くフローティング・パレット（Decade Pager）。
-/// 1ページ=10件(decade)を固定高で表示。操作:
-///   数字 1-9,0 で表示行を即確定 / ↑↓ 行移動(端でページ送り) / ←→・Tab・[ ] でページ送り /
-///   ⌘1…⌘0 で decade 直接ジャンプ / Return 確定 / Esc 閉じ / クリック確定。
+/// 1ページ=10件(decade)を固定高で表示。履歴・スニペットを同じ行UIに通す（行は `PaletteRow` 多態）。操作:
+///   数字 1-9,0 で表示行を確定（フォルダは中へ入る／その他は貼付） / ↑↓ 行移動(端でページ送り) /
+///   ←→・[ ] でページ送り / ⇥ で History⇄Snippets 切替 / ⌘1…⌘0 で decade ジャンプ /
+///   Return 確定 / Esc 閉じ（スニペット階層では1階層戻る） / クリック確定。
 /// キーイベントの捕捉は HistoryPanelController（NSEvent ローカルモニタ）側。ここは表示専任。
 struct HistoryPaletteView: View {
     @Environment(PaletteModel.self) private var model
 
-    /// 項目確定時（クリック）。
-    let onSelect: (ClipboardItem) -> Void
+    /// 行確定時（クリック）。
+    let onSelect: (PaletteRow) -> Void
     /// アクセシビリティ権限の要求（バナーの「開く」）。
     let onRequestAccessibility: () -> Void
 
@@ -29,9 +30,9 @@ struct HistoryPaletteView: View {
                 Divider()
             }
 
-            if model.visibleItems.isEmpty {
+            if model.rows.isEmpty {
                 Spacer()
-                Text("No history yet")
+                Text(emptyText)
                     .foregroundStyle(.secondary)
                 Spacer()
             } else {
@@ -49,8 +50,10 @@ struct HistoryPaletteView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Text("Tameo — History")
+            Text(headerTitle)
                 .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.tail)
             if let range = model.displayedRange {
                 Text("\(range.lowerBound)–\(range.upperBound)")
                     .font(.system(.caption, design: .rounded).weight(.semibold))
@@ -59,7 +62,7 @@ struct HistoryPaletteView: View {
                     .background(Color.secondary.opacity(0.15), in: Capsule())
             }
             Spacer()
-            Text("⌘⇧V")
+            Text(sourceHint)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -67,18 +70,44 @@ struct HistoryPaletteView: View {
         .padding(.vertical, 8)
     }
 
+    /// ヘッダ左のタイトル（ソース別）。
+    private var headerTitle: String {
+        switch model.source {
+        case .history: return "Tameo — History"
+        case .snippetFolders: return "Tameo — Snippets"
+        case .snippetItems(let folder): return folder.title.isEmpty ? "Snippets" : folder.title
+        }
+    }
+
+    /// ヘッダ右の ⇥ ヒント（切替先を示す）。
+    private var sourceHint: String {
+        switch model.source {
+        case .history: return "⇥ Snippets"
+        case .snippetFolders, .snippetItems: return "⇥ History"
+        }
+    }
+
+    /// 空表示の文言（ソース別）。
+    private var emptyText: String {
+        switch model.source {
+        case .history: return "No history yet"
+        case .snippetFolders: return "No snippets yet"
+        case .snippetItems: return "This folder is empty"
+        }
+    }
+
     // MARK: - Rows（固定高1ページ・スクロールなし）
 
     private var rows: some View {
         VStack(spacing: 0) {
-            ForEach(Array(model.pageItems.enumerated()), id: \.element.persistentModelID) { index, item in
-                row(index: index, item: item)
+            ForEach(Array(model.pageItems.enumerated()), id: \.element.id) { index, row in
+                rowView(index: index, row: row)
             }
         }
         .padding(.horizontal, 4)
         .padding(.top, 4)
-        // ページ切替を軽くクロスフェード。実発火はミューテーション側の withAnimation が駆動する。
-        .id(model.pageIndex)
+        // ソース／ページ切替を軽くクロスフェード。実発火はミューテーション側の withAnimation が駆動する。
+        .id("\(model.source.key)-\(model.pageIndex)")
         .transition(.opacity)
     }
 
@@ -87,25 +116,25 @@ struct HistoryPaletteView: View {
     /// 種別アイコンの固定枠（≤ rowContentHeight で行高を崩さない）。
     private static let leadingSize: CGFloat = 18
 
-    private func row(index: Int, item: ClipboardItem) -> some View {
+    private func rowView(index: Int, row: PaletteRow) -> some View {
         let isSelected = (model.clampedRow == index)
         let badge = index == 9 ? "0" : "\(index + 1)"   // 0 = 10行目
         return Button {
             model.rowInPage = index
-            onSelect(item)
+            onSelect(row)
         } label: {
             HStack(spacing: 8) {
                 Text(badge)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
                     .frame(width: 16, alignment: .trailing)
-                // text は先頭アイコンなし＝M2 と同一外観。非テキストのみ固定枠のアイコンを差し込む。
-                if item.kind != .text {
-                    leadingSlot(for: item, isSelected: isSelected)
+                // 履歴テキストだけ先頭アイコンなし＝M2 と同一外観。それ以外は固定枠のアイコンを差し込む。
+                if showsLeading(row) {
+                    leadingSlot(for: row, isSelected: isSelected)
                         .frame(width: Self.leadingSize, height: Self.leadingSize)
                         .clipped()
                 }
-                Text(item.content)
+                Text(row.title)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .foregroundStyle(isSelected ? Color.white : Color.primary)
@@ -120,10 +149,30 @@ struct HistoryPaletteView: View {
         .buttonStyle(.plain)
     }
 
-    /// 種別ごとの先頭アイコン（固定枠。`.text` は呼ばれない＝M2 と同一外観を維持）。
-    /// filename はファイルアイコン（取り込み時に解決済の thumbnailPNG）。画像/色等は PR-B/C で本実装。
+    /// 先頭アイコンを出すか（履歴テキストだけは出さない＝M2 と同一外観）。
+    private func showsLeading(_ row: PaletteRow) -> Bool {
+        if case .clip(.text) = row.leadingKind { return false }
+        return true
+    }
+
+    /// 行種別ごとの先頭アイコン（固定枠）。
     @ViewBuilder
-    private func leadingSlot(for item: ClipboardItem, isSelected: Bool) -> some View {
+    private func leadingSlot(for row: PaletteRow, isSelected: Bool) -> some View {
+        switch row {
+        case .folder:
+            Image(systemName: "folder")
+                .foregroundStyle(isSelected ? Color.white : Color.secondary)
+        case .snippet:
+            Image(systemName: "text.quote")
+                .foregroundStyle(isSelected ? Color.white : Color.secondary)
+        case .history(let item):
+            historyLeading(for: item, isSelected: isSelected)
+        }
+    }
+
+    /// 履歴項目の種別アイコン（filename はファイルアイコン、画像はサムネ等）。`.text` は呼ばれない。
+    @ViewBuilder
+    private func historyLeading(for item: ClipboardItem, isSelected: Bool) -> some View {
         switch item.kind {
         case .filename:
             if let data = item.thumbnailPNG, let img = cachedImage(for: item, data: data) {
@@ -174,11 +223,11 @@ struct HistoryPaletteView: View {
                         .frame(width: 6, height: 6)
                 }
                 Spacer()
-                Text("\(model.pageIndex + 1)/\(model.pageCount) · \(model.visibleItems.count) items")
+                Text("\(model.pageIndex + 1)/\(model.pageCount) · \(model.rows.count) items")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
-            Text("←/→ page · 1-0 paste · ↑↓ move · ⏎ select · esc")
+            Text("⇥ switch · 1-0 select · ←/→ page · ↑↓ move · esc")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)

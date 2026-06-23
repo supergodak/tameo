@@ -6,4 +6,6 @@ import KeyboardShortcuts
 extension KeyboardShortcuts.Name {
     /// 履歴パレットを開く（既定 ⌘⇧V、M6 の設定で再割当可）。
     static let showHistory = Self("showHistory")
+    /// スニペット一覧を直接開く（既定 ⌘⇧B、Clipy 互換。設定で再割当可）。
+    static let showSnippets = Self("showSnippets")
 }
