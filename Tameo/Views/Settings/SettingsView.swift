@@ -10,6 +10,8 @@ struct SettingsView: View {
                 .tabItem { Label("General", systemImage: "gearshape") }
             TypesSettingsTab()
                 .tabItem { Label("Types", systemImage: "square.on.square") }
+            ShortcutsSettingsTab()
+                .tabItem { Label("Shortcuts", systemImage: "command") }
             SnippetsSettingsTab()
                 .tabItem { Label("Snippets", systemImage: "text.quote") }
         }
