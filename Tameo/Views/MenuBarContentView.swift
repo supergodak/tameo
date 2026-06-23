@@ -38,8 +38,17 @@ struct MenuBarContentView: View {
             HStack {
                 Button("Clear History") { confirmClear = true }
                 Spacer()
-                Button("Settings…") { openSettings() }
-                    .keyboardShortcut(",", modifiers: .command)
+                // SettingsLink は SwiftUI の Settings scene を開く公式 API（⌘, の組み込み経路と同じ）。
+                // sendAction(showSettingsWindow:) は MenuBarExtra ポップオーバーのレスポンダチェーンに
+                // 届かず不発になるため使わない。前面化は simultaneousGesture で明示的に補い、
+                // ポップオーバー表示中の ⌘, も明示ショートカットで担保する。
+                SettingsLink {
+                    Text("Settings…")
+                }
+                .keyboardShortcut(",", modifiers: .command)
+                .simultaneousGesture(TapGesture().onEnded {
+                    NSApp.activate()
+                })
                 Button("Quit Tameo") { NSApplication.shared.terminate(nil) }
                     .keyboardShortcut("q")
             }
@@ -54,13 +63,5 @@ struct MenuBarContentView: View {
             }
             Button("Cancel", role: .cancel) { }
         }
-    }
-
-    /// 設定ウィンドウ（SwiftUI `Settings` scene）を開く。
-    /// LSUIElement（Dock非表示）＋ `MenuBarExtra(.window)` 環境では `SettingsLink` だけだと
-    /// 背面化しがちなため、明示的にアプリを前面化してから標準セレクタで開く。
-    private func openSettings() {
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
 }

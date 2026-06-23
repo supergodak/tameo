@@ -1,5 +1,7 @@
 import SwiftUI
 import SwiftData
+import AppKit
+import UniformTypeIdentifiers
 
 /// 左ペインのツリー選択（フォルダ or スニペットを永続IDで識別）。
 enum SnippetSelection: Hashable {
@@ -14,6 +16,8 @@ struct SnippetsSettingsTab: View {
     @Query(sort: \SnippetFolder.order) private var folders: [SnippetFolder]
 
     @State private var selection: SnippetSelection?
+    @State private var importMessage: String?
+    @State private var showImportResult = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -22,6 +26,11 @@ struct SnippetsSettingsTab: View {
             Divider()
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .alert("Import from Clipy", isPresented: $showImportResult) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(importMessage ?? "")
         }
     }
 
@@ -62,6 +71,8 @@ struct SnippetsSettingsTab: View {
             Button { addSnippet() } label: { Image(systemName: "plus") }
                 .help("New Snippet")
                 .disabled(targetFolderForNewSnippet == nil)
+            Button { importFromClipy() } label: { Image(systemName: "square.and.arrow.down") }
+                .help("Import snippets from a Clipy XML export…")
             Spacer()
             Button { moveSelection(by: -1) } label: { Image(systemName: "chevron.up") }
                 .help("Move Up")
@@ -127,6 +138,26 @@ struct SnippetsSettingsTab: View {
     private func addFolder() {
         let folder = store.addFolder(title: "New Folder")
         selection = .folder(folder.persistentModelID)
+    }
+
+    /// Clipy のスニペット XML エクスポートを選んで取り込む（既存は破壊せず末尾に追加）。
+    private func importFromClipy() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.xml]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Select a Clipy snippets XML export"
+        NSApp.activate()   // runModal 前の前面化保険（設定ウィンドウが既に前面なら no-op）
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let folders = try ClipySnippetImporter.parse(url: url)
+            let result = store.importClipyFolders(folders)
+            // 取り込みは末尾追加（既存は保持）。同じファイルを再度取り込むと重複が増えることを明示する。
+            importMessage = "Added \(result.folders) folder(s) and \(result.snippets) snippet(s). Existing snippets were kept."
+        } catch {
+            importMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+        showImportResult = true
     }
 
     private func addSnippet() {

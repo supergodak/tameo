@@ -83,6 +83,47 @@ final class SnippetStore {
         save()
     }
 
+    // MARK: - Import（Clipy XML 取り込み）
+
+    /// Clipy からインポートしたフォルダ群を末尾に**追加**する（既存は破壊しない）。
+    /// 戻り値は作成した (フォルダ数, スニペット数)。タイトル空のスニペットは本文先頭行から補完する。
+    @discardableResult
+    func importClipyFolders(_ imported: [ClipyImportedFolder]) -> (folders: Int, snippets: Int) {
+        var folderCount = 0, snippetCount = 0
+        var nextFolderOrder = (allFolders().last?.order ?? -1) + 1
+
+        for impFolder in imported {
+            let title = impFolder.title.isEmpty ? "Imported" : impFolder.title
+            let folder = SnippetFolder(title: title, order: nextFolderOrder, enabled: impFolder.enabled)
+            nextFolderOrder += 1
+            modelContext.insert(folder)
+            folderCount += 1
+
+            for (i, impSnippet) in impFolder.snippets.enumerated() {
+                let snipTitle = impSnippet.title.isEmpty
+                    ? Self.deriveTitle(from: impSnippet.content)
+                    : impSnippet.title
+                let snippet = Snippet(title: snipTitle, content: impSnippet.content,
+                                      order: i, enabled: impSnippet.enabled)
+                snippet.folder = folder
+                modelContext.insert(snippet)
+                snippetCount += 1
+            }
+        }
+        save()
+        return (folderCount, snippetCount)
+    }
+
+    /// タイトル未設定スニペットの表示名を本文の最初の非空行から導出（最大40文字）。
+    /// 先頭が空行でも、その下に実テキストがあればそれを採用する。
+    private static func deriveTitle(from content: String) -> String {
+        let firstNonEmpty = content
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty } ?? ""
+        return firstNonEmpty.isEmpty ? "Untitled" : String(firstNonEmpty.prefix(40))
+    }
+
     // MARK: - Reorder（D&D 後の表示順配列を受け取り 0..n へ密連番再採番）
 
     func reorderFolders(_ folders: [SnippetFolder]) {
