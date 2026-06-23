@@ -15,11 +15,12 @@ except Exception:
 if not isinstance(rs, list) or not rs:
     print("  (リリース未公開)"); sys.exit()
 for r in rs:
+    tag = str(r.get("tag_name"))
     assets = r.get("assets", [])
     if not assets:
-        print(f"  {r.get(\"tag_name\")}: (アセットなし)")
+        print("  " + tag + ": (アセットなし)")
     for a in assets:
-        print(f"  {r.get(\"tag_name\")} / {a[\"name\"]}: {a[\"download_count\"]} downloads")
+        print("  " + tag + " / " + a["name"] + ": " + str(a["download_count"]) + " downloads")
 '
 
 echo
@@ -29,7 +30,7 @@ LOG=/var/log/nginx/tameo.access.log
 if [ ! -f "$LOG" ]; then echo "  (ログなし)"; exit 0; fi
 echo "  ページ表示 (GET / 200):    $(grep -c "GET / HTTP" "$LOG" 2>/dev/null)"
 echo "  ユニークIP (概算):         $(awk "{print \$1}" "$LOG" | sort -u | wc -l | tr -d " ")"
-echo "  ダウンロードクリック (/dl): $(grep -c "GET /dl" "$LOG" 2>/dev/null)"
+echo "  ダウンロードクリック (/dl): $(grep -cE " /dl[ ?]" "$LOG" 2>/dev/null)"
 echo "  期間: $(head -1 "$LOG" | grep -oE "\[[^]]+\]" | head -1) 〜 $(tail -1 "$LOG" | grep -oE "\[[^]]+\]" | head -1)"
 '
 echo
