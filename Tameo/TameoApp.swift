@@ -27,7 +27,7 @@ struct TameoApp: App {
             let snippetStore = SnippetStore(modelContext: container.mainContext)
             // 自己コピー抑止ゲートを監視とペーストで共有（貼り戻し由来の重複行を防ぐ）。
             let gate = PasteboardWriteGate()
-            let monitor = ClipboardMonitor(store: store, gate: gate)
+            let monitor = ClipboardMonitor(store: store, gate: gate, settings: settings)
             // 起動と同時に監視開始（メニューを開く前から履歴を溜める）。
             monitor.start()
 
