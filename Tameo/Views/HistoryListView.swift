@@ -12,7 +12,9 @@ struct HistoryListView: View {
         if items.isEmpty {
             Text("No history yet")
                 .foregroundStyle(.secondary)
-                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
         } else {
             ForEach(items) { item in
                 Button {
@@ -28,8 +30,8 @@ struct HistoryListView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(.plain)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
             }
         }
     }
