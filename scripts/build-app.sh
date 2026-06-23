@@ -29,6 +29,12 @@ sleep 1
 rm -rf /Applications/Tameo.app
 cp -R "$APP" /Applications/Tameo.app
 
+# Spotlight/LaunchServices が古い launchable コピーを掴まないよう、作業コピーを消し
+# /Applications を正本として登録し直す（同一 bundle id の重複起動を防ぐ）。
+rm -rf build/release
+LSR="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
+[ -x "$LSR" ] && "$LSR" -f /Applications/Tameo.app 2>/dev/null || true
+
 echo "Installed: /Applications/Tameo.app  (v$VERSION build $BUILD_NUM)"
 echo "Launching…"
 open /Applications/Tameo.app
