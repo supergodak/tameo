@@ -96,6 +96,15 @@ struct HistoryPaletteView: View {
         }
     }
 
+    /// フッターのキー凡例（ソース別。→＝入る／←＝出る を文脈で出し分け）。
+    private var legend: String {
+        switch model.source {
+        case .history: return "⇥ Snippets · ←/→ page · 1-0 paste · ↑↓ move · esc"
+        case .snippetFolders: return "→ open · 1-0 open · ⇥ History · ↑↓ move · esc"
+        case .snippetItems: return "← back · 1-0 paste · ↑↓ move · esc"
+        }
+    }
+
     // MARK: - Rows（固定高1ページ・スクロールなし）
 
     private var rows: some View {
@@ -227,7 +236,7 @@ struct HistoryPaletteView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
-            Text("⇥ switch · 1-0 select · ←/→ page · ↑↓ move · esc")
+            Text(legend)
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)

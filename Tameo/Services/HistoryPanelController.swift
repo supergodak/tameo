@@ -196,6 +196,24 @@ final class HistoryPanelController {
         }
     }
 
+    /// → ：スニペットのフォルダ一覧で選択がフォルダなら中へ入る、それ以外はページ送り（次）。
+    private func handleRightArrow() {
+        if case .snippetFolders = model.source, case .folder(let folder)? = model.selectedRow {
+            animated { enterFolder(folder) }
+        } else {
+            animated { model.page(by: 1) }
+        }
+    }
+
+    /// ← ：フォルダの中身を見ているときは 1 階層戻る、それ以外はページ送り（前）。
+    private func handleLeftArrow() {
+        if case .snippetItems = model.source {
+            animated { loadSnippetFolders() }
+        } else {
+            animated { model.page(by: -1) }
+        }
+    }
+
     // MARK: - Snapshot
 
     /// 現在の履歴上位（最終使用日時の新しい順）を最大 maxItems 件スナップショットする。
@@ -246,8 +264,10 @@ final class HistoryPanelController {
             return true
         case 125: animated { model.moveRow(by: 1) }; return true                  // ↓
         case 126: animated { model.moveRow(by: -1) }; return true                 // ↑
-        case 123, 33: animated { model.page(by: -1) }; return true                // ← / [
-        case 124, 30: animated { model.page(by: 1) }; return true                 // → / ]
+        case 33: animated { model.page(by: -1) }; return true                     // [ : ページ送り（前）
+        case 30: animated { model.page(by: 1) }; return true                      // ] : ページ送り（次）
+        case 123: handleLeftArrow(); return true                                  // ← : 出る or ページ送り（前）
+        case 124: handleRightArrow(); return true                                 // → : 入る or ページ送り（次）
         case 48: animated { switchSource() }; return true                         // ⇥ : History ⇄ Snippets
         case 36, 76: commitSelected(); return true                                // return / keypad enter
         default: break
