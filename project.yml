@@ -30,6 +30,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSUIElement: YES               # メニューバー常駐・Dockアイコン非表示
         INFOPLIST_KEY_NSHumanReadableCopyright: "© 2026 ATI Inc."
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon  # Tameo/Assets.xcassets の AppIcon を使う
     dependencies:
       - package: Sauce             # キーレイアウト補正キーコード（CGEvent Cmd+V 合成用, M2）
       - package: KeyboardShortcuts # グローバルホットキー（M2）
