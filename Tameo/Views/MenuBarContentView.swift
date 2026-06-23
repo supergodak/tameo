@@ -12,9 +12,12 @@ struct MenuBarContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
+            HStack(spacing: 6) {
                 Text("Tameo")
                     .font(.headline)
+                Text(appVersion)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 Spacer()
                 if let onOpenPalette {
                     Button("Open History  ⌘⇧V") { onOpenPalette() }
@@ -37,6 +40,7 @@ struct MenuBarContentView: View {
 
             HStack {
                 Button("Clear History") { confirmClear = true }
+                Button("About") { showAbout() }
                 Spacer()
                 // SettingsLink は SwiftUI の Settings scene を開く公式 API（⌘, の組み込み経路と同じ）。
                 // sendAction(showSettingsWindow:) は MenuBarExtra ポップオーバーのレスポンダチェーンに
@@ -49,7 +53,7 @@ struct MenuBarContentView: View {
                 .simultaneousGesture(TapGesture().onEnded {
                     NSApp.activate()
                 })
-                Button("Quit Tameo") { NSApplication.shared.terminate(nil) }
+                Button("Quit") { NSApplication.shared.terminate(nil) }
                     .keyboardShortcut("q")
             }
             .padding(.horizontal, 8)
@@ -63,5 +67,18 @@ struct MenuBarContentView: View {
             }
             Button("Cancel", role: .cancel) { }
         }
+    }
+
+    /// "v<MARKETING_VERSION> (<CURRENT_PROJECT_VERSION>)"。ビルド番号は git コミット数で自動採番。
+    private var appVersion: String {
+        let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        return "v\(v) (\(b))"
+    }
+
+    /// 標準 About パネルを前面に表示（バージョン・著作権・アイコンを Info.plist から自動表示）。
+    private func showAbout() {
+        NSApp.activate()
+        NSApp.orderFrontStandardAboutPanel(nil)
     }
 }
