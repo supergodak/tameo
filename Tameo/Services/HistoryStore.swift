@@ -9,11 +9,12 @@ import Observation
 @Observable
 final class HistoryStore {
     private let modelContext: ModelContext
-    /// 履歴の最大保持数（既定）。超過分は古い順に削除。
-    var maxHistory: Int = 200
+    /// 履歴の最大保持数の真実源（設定で可変）。超過分は古い順に削除。
+    private let settings: SettingsStore
 
-    init(modelContext: ModelContext) {
+    init(modelContext: ModelContext, settings: SettingsStore) {
         self.modelContext = modelContext
+        self.settings = settings
     }
 
     /// 監視側が組み立てた捕捉ペイロードを履歴へ取り込む（全種別共通の入口）。
@@ -89,6 +90,7 @@ final class HistoryStore {
     }
 
     private func prune() {
+        let maxHistory = settings.maxHistory
         // まず件数だけを問い合わせ、上限以下なら全件フェッチを避ける（O(n) 全スキャン回避）。
         let total = (try? modelContext.fetchCount(FetchDescriptor<ClipboardItem>())) ?? 0
         guard total > maxHistory else { return }

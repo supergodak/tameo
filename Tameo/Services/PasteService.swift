@@ -21,9 +21,11 @@ protocol PasteServicing {
 final class PasteService: PasteServicing {
     /// 自己コピー抑止ゲート（書き込み直後に changeCount を記録し、監視側の再取り込みを止める）。
     private let gate: PasteboardWriteGate
+    private let settings: SettingsStore
 
-    init(gate: PasteboardWriteGate) {
+    init(gate: PasteboardWriteGate, settings: SettingsStore) {
         self.gate = gate
+        self.settings = settings
     }
 
     /// 選択項目を種別に応じて汎用ペーストボードへ書き込むだけ（合成ペーストはしない）。
@@ -66,6 +68,8 @@ final class PasteService: PasteServicing {
 
     /// ペーストボード書込済みの内容を `target` へ合成 Cmd+V で送る共通処理。
     private func synthesizePasteCommand(to target: NSRunningApplication) {
+        // 「選択後に⌘Vを自動入力」が無効なら、内容はペーストボードへ載っているので手動貼付に委ねて終了。
+        guard settings.inputPasteCommand else { return }
         // アクセシビリティ未許可なら合成キーは送れない。プロンプト後も未許可なら設定画面へ誘導。
         guard AccessibilityAuthorization.isTrusted else {
             AccessibilityAuthorization.requestPrompt()

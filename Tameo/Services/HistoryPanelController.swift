@@ -6,7 +6,7 @@ import Observation
 /// 履歴パレットの一時的なUI状態（Decade Pager）。
 /// 一覧を 10 件＝1ページ（decade）に区切り、`pageIndex` と「ページ内の選択行 `rowInPage`(0..9)」で
 /// 選択を表す。グローバル添字は確定時にだけ導出する（ページ境界の桁ズレを避けるための単一基準）。
-/// `rows` は `show()` 時のスナップショット（履歴は最大 maxItems 件）で、表示中は不変。
+/// `rows` は `show()` 時のスナップショット（履歴は設定の最大件数）で、表示中は不変。
 @MainActor
 @Observable
 final class PaletteModel {
@@ -105,13 +105,15 @@ final class PaletteModel {
 /// MenuBarExtra(.window) はホットキーから直接開けないため、貼り付け面は専用パネルで完全自前制御する。
 @MainActor
 final class HistoryPanelController {
-    /// パレットが保持・表示する履歴の最大件数（10件×10ページ）。将来は設定で可変にする。
-    static let maxItems = 100
+    /// パレットに表示する履歴の最大件数（10 ページ＝10 件×10）。ストレージ保持上限 `settings.maxHistory`
+    /// （最大 1000）とは別物。⌘N の到達範囲とフッターのドット rail を 10 ページに収め、UI 破綻を防ぐ。
+    private static let paletteItemCap = 100
 
     private let modelContainer: ModelContainer
     private let store: HistoryStore
     private let snippetStore: SnippetStore
     private let paste: PasteService
+    private let settings: SettingsStore
     private let model = PaletteModel()
     private var panel: NSPanel?
     /// パネルがキーの間だけ有効なキーイベント監視トークン。
@@ -121,11 +123,13 @@ final class HistoryPanelController {
     /// ホットキー発火時点の前面アプリ（＝貼り付け対象）。
     private var targetApp: NSRunningApplication?
 
-    init(modelContainer: ModelContainer, store: HistoryStore, snippetStore: SnippetStore, paste: PasteService) {
+    init(modelContainer: ModelContainer, store: HistoryStore, snippetStore: SnippetStore,
+         paste: PasteService, settings: SettingsStore) {
         self.modelContainer = modelContainer
         self.store = store
         self.snippetStore = snippetStore
         self.paste = paste
+        self.settings = settings
     }
 
     /// 表示中なら閉じ、非表示なら履歴を開く（⌘⇧V 用）。
@@ -164,7 +168,7 @@ final class HistoryPanelController {
 
     // MARK: - Source loading（表示ソースの切替・スニペット階層）
 
-    /// 履歴ソースへ。最終使用日時の新しい順、最大 maxItems 件のスナップショット。
+    /// 履歴ソースへ。設定のソート順・最大件数でスナップショット。
     private func loadHistory() {
         model.source = .history
         model.snippetStack.removeAll()
@@ -216,11 +220,18 @@ final class HistoryPanelController {
 
     // MARK: - Snapshot
 
-    /// 現在の履歴上位（最終使用日時の新しい順）を最大 maxItems 件スナップショットする。
+    /// 現在の履歴上位を設定のソート順・最大件数でスナップショットする。
     /// 表示中はこの配列を凍結して使う（ページUIなので背は固定、画面外化しない）。
     private func fetchTopItems() -> [ClipboardItem] {
-        var d = FetchDescriptor<ClipboardItem>(sortBy: [SortDescriptor(\.lastUsedAt, order: .reverse)])
-        d.fetchLimit = Self.maxItems
+        let sort: [SortDescriptor<ClipboardItem>]
+        switch settings.sortOrder {
+        case .lastUsed: sort = [SortDescriptor(\.lastUsedAt, order: .reverse)]
+        case .createdAt: sort = [SortDescriptor(\.createdAt, order: .reverse)]
+        }
+        var d = FetchDescriptor<ClipboardItem>(sortBy: sort)
+        // 保持上限 maxHistory は最大 1000 まで可変だが、パレット表示は 10 ページ(100件)に抑える
+        // （⌘N の到達範囲・ドット rail を破綻させない。残りはストレージに保持され将来の検索で辿れる）。
+        d.fetchLimit = min(settings.maxHistory, Self.paletteItemCap)
         return (try? modelContainer.mainContext.fetch(d)) ?? []
     }
 
