@@ -8,6 +8,8 @@ struct SettingsView: View {
         TabView {
             GeneralSettingsTab()
                 .tabItem { Label("General", systemImage: "gearshape") }
+            TypesSettingsTab()
+                .tabItem { Label("Types", systemImage: "square.on.square") }
             SnippetsSettingsTab()
                 .tabItem { Label("Snippets", systemImage: "text.quote") }
         }

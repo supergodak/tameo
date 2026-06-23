@@ -34,6 +34,18 @@ final class SettingsStore {
         didSet { defaults.set(inputPasteCommand, forKey: Keys.inputPasteCommand) }
     }
 
+    // MARK: - 保存する種別（既定すべて true ＝従来等価）。ClipboardMonitor が取り込み前に参照する。
+    var storeText: Bool { didSet { defaults.set(storeText, forKey: Keys.storeText) } }
+    var storeRichText: Bool { didSet { defaults.set(storeRichText, forKey: Keys.storeRichText) } }
+    var storePDF: Bool { didSet { defaults.set(storePDF, forKey: Keys.storePDF) } }
+    var storeImage: Bool { didSet { defaults.set(storeImage, forKey: Keys.storeImage) } }
+    var storeFilename: Bool { didSet { defaults.set(storeFilename, forKey: Keys.storeFilename) } }
+    var storeURL: Bool { didSet { defaults.set(storeURL, forKey: Keys.storeURL) } }
+    var storeColor: Bool { didSet { defaults.set(storeColor, forKey: Keys.storeColor) } }
+
+    /// 機密マーク付き（パスワードマネージャ等の ConcealedType）を履歴に残さない（既定 true）。
+    var ignoreConcealed: Bool { didSet { defaults.set(ignoreConcealed, forKey: Keys.ignoreConcealed) } }
+
     /// ログイン時に起動（`SMAppService` 連動。UserDefaults ではなくシステムの登録状態が真実源）。
     var launchAtLogin: Bool {
         didSet {
@@ -50,8 +62,29 @@ final class SettingsStore {
         self.maxHistory = (defaults.object(forKey: Keys.maxHistory) as? Int) ?? 200
         self.sortOrder = HistorySortOrder(rawValue: defaults.string(forKey: Keys.sortOrder) ?? "") ?? .lastUsed
         self.inputPasteCommand = (defaults.object(forKey: Keys.inputPasteCommand) as? Bool) ?? true
+        self.storeText = (defaults.object(forKey: Keys.storeText) as? Bool) ?? true
+        self.storeRichText = (defaults.object(forKey: Keys.storeRichText) as? Bool) ?? true
+        self.storePDF = (defaults.object(forKey: Keys.storePDF) as? Bool) ?? true
+        self.storeImage = (defaults.object(forKey: Keys.storeImage) as? Bool) ?? true
+        self.storeFilename = (defaults.object(forKey: Keys.storeFilename) as? Bool) ?? true
+        self.storeURL = (defaults.object(forKey: Keys.storeURL) as? Bool) ?? true
+        self.storeColor = (defaults.object(forKey: Keys.storeColor) as? Bool) ?? true
+        self.ignoreConcealed = (defaults.object(forKey: Keys.ignoreConcealed) as? Bool) ?? true
         // ログイン項目は OS の登録状態を初期値に（.requiresApproval も実質有効として扱う。UserDefaults とは独立）。
         self.launchAtLogin = Self.isEffectivelyEnabled(SMAppService.mainApp.status)
+    }
+
+    /// 指定種別を履歴に保存するか（`ClipboardMonitor` の取り込みゲート）。既定はすべて true。
+    func isStoreEnabled(_ kind: ClipKind) -> Bool {
+        switch kind {
+        case .text: return storeText
+        case .rtf, .rtfd: return storeRichText
+        case .pdf: return storePDF
+        case .png, .tiff: return storeImage
+        case .filename: return storeFilename
+        case .url: return storeURL
+        case .color: return storeColor
+        }
     }
 
     /// ログイン項目の登録/解除を OS へ反映し、実状態へ再同期する。
@@ -84,5 +117,13 @@ final class SettingsStore {
         static let maxHistory = "tameo.maxHistory"
         static let sortOrder = "tameo.sortOrder"
         static let inputPasteCommand = "tameo.inputPasteCommand"
+        static let storeText = "tameo.store.text"
+        static let storeRichText = "tameo.store.richText"
+        static let storePDF = "tameo.store.pdf"
+        static let storeImage = "tameo.store.image"
+        static let storeFilename = "tameo.store.filename"
+        static let storeURL = "tameo.store.url"
+        static let storeColor = "tameo.store.color"
+        static let ignoreConcealed = "tameo.ignoreConcealed"
     }
 }

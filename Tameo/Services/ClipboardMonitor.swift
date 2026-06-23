@@ -12,6 +12,8 @@ final class ClipboardMonitor {
     private let store: HistoryStore
     /// 自己コピー抑止ゲート（貼り戻し由来の重複行を防ぐ）。
     private let gate: PasteboardWriteGate
+    /// 種別ごとの保存トグル・機密除外の参照元。
+    private let settings: SettingsStore
     private let pasteboard: NSPasteboard = .general
     private var lastChangeCount: Int
     private var timer: Timer?
@@ -25,9 +27,10 @@ final class ClipboardMonitor {
     /// 画像の非同期取り込みで、古い結果が新しい結果の後に着地しないための単調ガード。
     private var latestAppliedImageChange = 0
 
-    init(store: HistoryStore, gate: PasteboardWriteGate) {
+    init(store: HistoryStore, gate: PasteboardWriteGate, settings: SettingsStore) {
         self.store = store
         self.gate = gate
+        self.settings = settings
         // 起動時点の既存クリップは無視する。
         self.lastChangeCount = NSPasteboard.general.changeCount
     }
@@ -66,8 +69,12 @@ final class ClipboardMonitor {
         // データ読み取りの **前** に弾く（プライバシー据え置き）。
         for item in items {
             let types = Set(item.types)
-            if !ignoredMarkerTypes.isDisjoint(with: types) {
-                return // 機密/一時/自動生成 → この変更は丸ごと無視
+            // 一時/自動生成は常に無視。機密(ConcealedType)は設定 ignoreConcealed が有効なときだけ無視。
+            if !alwaysIgnoredMarkerTypes.isDisjoint(with: types) {
+                return
+            }
+            if settings.ignoreConcealed && types.contains(.concealed) {
+                return
             }
         }
 
@@ -79,6 +86,10 @@ final class ClipboardMonitor {
         var allTypes = Set<NSPasteboard.PasteboardType>()
         for item in items { allTypes.formUnion(item.types) }
         let kind = ClipKind.detect(types: allTypes)
+
+        // 種別ごとの保存トグル（既定すべて true）。無効種別はここで弾く＝内容を読まない／
+        // 画像の Task.detached も起動しない（プライバシー・余計な処理を増やさない）。
+        guard settings.isStoreEnabled(kind) else { return }
 
         switch kind {
         case .png, .tiff:
