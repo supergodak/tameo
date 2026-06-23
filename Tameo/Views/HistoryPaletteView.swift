@@ -39,6 +39,8 @@ struct HistoryPaletteView: View {
                 rows
                 Spacer(minLength: 0)
                 Divider()
+                preview
+                Divider()
                 footer
             }
         }
@@ -219,6 +221,38 @@ struct HistoryPaletteView: View {
     /// 永続ID単位でサムネ NSImage を取得（キャッシュ経由。フル原寸は読まない）。
     private func cachedImage(for item: ClipboardItem, data: Data) -> NSImage? {
         thumbnailCache.image(forKey: "\(item.persistentModelID)", data: data)
+    }
+
+    // MARK: - Preview（選択中の行の内容を貼る前に表示）
+
+    /// 選択中の行の内容（履歴/スニペットは本文、フォルダは件数）を固定高で表示。
+    /// 選択は `model.selectedRow`＝`pageIndex`/`rowInPage` から導出されるので、
+    /// ↑↓・数字・ページ送りで移動すると自動で更新される。
+    private var preview: some View {
+        Text(previewText)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(3)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .frame(height: 52)
+            .background(Color.secondary.opacity(0.06))
+    }
+
+    /// プレビュー本文。履歴/スニペットは内容、フォルダは有効スニペット数。
+    private var previewText: String {
+        guard let row = model.selectedRow else { return "" }
+        switch row {
+        case .history(let item):
+            return item.content
+        case .snippet(let snippet):
+            return snippet.content
+        case .folder(let folder):
+            let n = folder.enabledSnippets.count
+            return "📁 \(folder.title) · \(n) snippet\(n == 1 ? "" : "s")"
+        }
     }
 
     // MARK: - Footer（ドット rail ＋ 位置 ＋ キー凡例）
