@@ -14,6 +14,8 @@ struct SettingsView: View {
                 .tabItem { Label("Shortcuts", systemImage: "command") }
             SnippetsSettingsTab()
                 .tabItem { Label("Snippets", systemImage: "text.quote") }
+            ExcludeAppSettingsTab()
+                .tabItem { Label("Excluded Apps", systemImage: "nosign") }
         }
         .frame(width: 620, height: 440)
     }
