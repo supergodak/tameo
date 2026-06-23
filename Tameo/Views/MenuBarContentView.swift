@@ -38,6 +38,17 @@ struct MenuBarContentView: View {
             HStack {
                 Button("Clear History") { confirmClear = true }
                 Spacer()
+                // SettingsLink は SwiftUI の Settings scene を開く公式 API（⌘, の組み込み経路と同じ）。
+                // sendAction(showSettingsWindow:) は MenuBarExtra ポップオーバーのレスポンダチェーンに
+                // 届かず不発になるため使わない。前面化は simultaneousGesture で明示的に補い、
+                // ポップオーバー表示中の ⌘, も明示ショートカットで担保する。
+                SettingsLink {
+                    Text("Settings…")
+                }
+                .keyboardShortcut(",", modifiers: .command)
+                .simultaneousGesture(TapGesture().onEnded {
+                    NSApp.activate()
+                })
                 Button("Quit Tameo") { NSApplication.shared.terminate(nil) }
                     .keyboardShortcut("q")
             }
