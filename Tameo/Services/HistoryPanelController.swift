@@ -155,6 +155,11 @@ final class HistoryPanelController {
         model.accessibilityTrusted = AccessibilityAuthorization.isTrusted
 
         let panel = ensurePanel()
+        // バナー（権限未許可）の有無で縦を変える。ビュー側 `.frame` と同じ式で揃え、隙間/見切れを防ぐ。
+        panel.setContentSize(NSSize(
+            width: PaletteMetrics.width,
+            height: PaletteMetrics.height(bannerShown: !model.accessibilityTrusted)
+        ))
         positionAtMouse(panel)   // 開くたびにカーソル位置へ（Clipy流。視線/マウス移動を最小化）
         installKeyMonitor()
         NSApp.activate()

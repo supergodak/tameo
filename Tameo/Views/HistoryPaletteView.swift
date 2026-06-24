@@ -2,6 +2,19 @@ import SwiftUI
 import SwiftData
 import AppKit
 
+/// パレットの寸法。ビュー(`HistoryPaletteView`)とパネル(`HistoryPanelController`)で同じ式を共有し、
+/// 両者の高さがズレて隙間/見切れが出ないようにする。
+enum PaletteMetrics {
+    static let width: CGFloat = 360
+    static let baseHeight: CGFloat = 440
+    /// 権限バナー表示時に縦へ加える分（バナー＋区切り線の高さを上回る値。これで内容が固定高を超えて
+    /// 中央寄せ・上下見切れになるのを防ぐ。未許可状態でだけ適用される一時的な増分）。
+    static let bannerExtraHeight: CGFloat = 76
+    static func height(bannerShown: Bool) -> CGFloat {
+        baseHeight + (bannerShown ? bannerExtraHeight : 0)
+    }
+}
+
 /// ホットキーで開くフローティング・パレット（Decade Pager）。
 /// 1ページ=10件(decade)を固定高で表示。履歴・スニペットを同じ行UIに通す（行は `PaletteRow` 多態）。操作:
 ///   数字 1-9,0 で表示行を確定（フォルダは中へ入る／その他は貼付） / ↑↓ 行移動(端でページ送り) /
@@ -44,7 +57,8 @@ struct HistoryPaletteView: View {
                 footer
             }
         }
-        .frame(width: 360, height: 440)
+        .frame(width: PaletteMetrics.width,
+               height: PaletteMetrics.height(bannerShown: !model.accessibilityTrusted))
         .clipped()   // 万一コンテンツが固定高を超えてもパネル外へ描画しない保護
     }
 
