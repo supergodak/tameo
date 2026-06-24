@@ -374,7 +374,12 @@ final class HistoryPanelController {
         )
         .environment(model)
 
-        p.contentView = NSHostingView(rootView: root)
+        // .titled + .fullSizeContentView はタイトルバー相当の上部セーフエリア inset を生む。
+        // ルートは固定高 440 のため、inset で縮んだ領域に中央寄せされ上下（ヘッダ／凡例）が見切れる。
+        // セーフエリアを無視させ、コンテンツをパネル全面（440pt）にぴったり敷く。
+        let hosting = NSHostingView(rootView: root)
+        hosting.safeAreaRegions = []
+        p.contentView = hosting
 
         // key を失ったら（他ウィンドウ/他アプリへフォーカス移動）パレットを閉じる＝Spotlight 流の挙動。
         // これで「表示中だが非 key」の宙ぶらりん状態が無くなり、toggle() の反転も起きない。
