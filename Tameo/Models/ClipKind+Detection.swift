@@ -9,9 +9,12 @@ extension ClipKind {
         if types.contains(.fileURL) { return .filename }
         if types.contains(.URL) { return .url }
         if types.contains(.color) { return .color }
-        if types.contains(.pdf) { return .pdf }
+        // リッチテキスト（RTF/RTFD）は PDF・画像より優先する。
+        // Excel/Word 等 Office アプリは 1 セルのコピーでも PDF・画像表現を一緒に載せるため、
+        // PDF を先に見ると「中身は文字」でも PDF と誤判定される。RTF があれば本質はテキスト。
         if types.contains(.rtfd) { return .rtfd }
         if types.contains(.rtf) { return .rtf }
+        if types.contains(.pdf) { return .pdf }
         if types.contains(.png) { return .png }
         if types.contains(.tiff) { return .tiff }
         return .text
