@@ -9,6 +9,8 @@ struct MenuBarContentView: View {
 
     /// 履歴パレットを開く（ホットキー以外の導線。未設定なら非表示）。
     var onOpenPalette: (() -> Void)? = nil
+    /// 更新チェック（Sparkle）。未設定なら非表示。
+    var onCheckForUpdates: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -48,6 +50,9 @@ struct MenuBarContentView: View {
                 Divider().padding(.horizontal, 8).padding(.vertical, 3)
 
                 MenuActionRow(title: "Clear History") { confirmClear = true }
+                if let onCheckForUpdates {
+                    MenuActionRow(title: "Check for Updates…") { onCheckForUpdates() }
+                }
                 MenuActionRow(title: "About Tameo") { showAbout() }
 
                 Divider().padding(.horizontal, 8).padding(.vertical, 3)

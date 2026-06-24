@@ -14,6 +14,7 @@ struct TameoApp: App {
     @State private var hotKeyCenter: HotKeyCenter
     @State private var settings: SettingsStore
     @State private var snippetStore: SnippetStore
+    @State private var updater: UpdaterController
 
     init() {
         do {
@@ -50,6 +51,8 @@ struct TameoApp: App {
             _hotKeyCenter = State(initialValue: hotKeyCenter)
             _settings = State(initialValue: settings)
             _snippetStore = State(initialValue: snippetStore)
+            // Sparkle 自動更新。生成と同時にバックグラウンドの定期チェックが始まる。
+            _updater = State(initialValue: UpdaterController())
         } catch {
             fatalError("Failed to create ModelContainer: \(error)")
         }
@@ -57,7 +60,10 @@ struct TameoApp: App {
 
     var body: some Scene {
         MenuBarExtra("Tameo", systemImage: "doc.on.clipboard") {
-            MenuBarContentView(onOpenPalette: { panelController.show() })
+            MenuBarContentView(
+                onOpenPalette: { panelController.show() },
+                onCheckForUpdates: { updater.checkForUpdates() }
+            )
                 .modelContainer(modelContainer)
                 .environment(store)
                 .environment(paste)

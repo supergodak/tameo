@@ -22,18 +22,22 @@ targets:
     type: application
     platform: macOS
     sources:
-      - Tameo
+      - path: Tameo
+        excludes:
+          - Info.plist                            # INFOPLIST_FILE として使うのでソース/リソースには含めない
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: jp.co.ati-mirai.tameo   # 確定（ati-mirai.co.jp の逆ドメイン）
         PRODUCT_NAME: Tameo
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_LSUIElement: YES               # メニューバー常駐・Dockアイコン非表示
-        INFOPLIST_KEY_NSHumanReadableCopyright: "© 2026 ATI Inc."
+        # Sparkle の SUFeedURL/SUPublicEDKey は INFOPLIST_KEY_ で載らない（Apple既定キーのみ対応）ため、
+        # 明示 Info.plist を使う。バージョン等は $(VAR) で従来どおりビルド設定から展開される。
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Tameo/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon  # Tameo/Assets.xcassets の AppIcon を使う
     dependencies:
       - package: Sauce             # キーレイアウト補正キーコード（CGEvent Cmd+V 合成用, M2）
       - package: KeyboardShortcuts # グローバルホットキー（M2）
+      - package: Sparkle           # 自動更新（appcast: tameo.ati-mirai.co.jp/appcast.xml）
 
 packages:
   Sauce:
@@ -42,3 +46,6 @@ packages:
   KeyboardShortcuts:
     url: https://github.com/sindresorhus/KeyboardShortcuts
     exactVersion: "3.0.1"          # 3.0.0 はリリースビルドでクラッシュするため厳密固定
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: "2.9.3"                  # 直接配布アプリの自動更新（EdDSA署名＋appcast）
