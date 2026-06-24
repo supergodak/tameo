@@ -68,6 +68,20 @@ struct CapturedPayload: Sendable {
         )
     }
 
+    /// 色コード文字列（テキスト由来＝NSColor 型でなく `#hex`/`rgb()` をコピーした場合）。
+    /// content は元の文字列（貼付・検索はこれ）、colorHex は正規化した #hex（チップ表示・色対応貼付用）。
+    static func color(code: String, hex: String, source: String?) -> CapturedPayload {
+        CapturedPayload(
+            kind: .color,
+            content: code,
+            payloadUTI: ClipKind.color.preferredUTI,
+            canonicalBytes: Data(code.utf8),
+            colorHex: hex,
+            sourceBundleID: source,
+            byteSize: code.utf8.count
+        )
+    }
+
     /// detached でサムネを得た後にコピーを返す（PR-B 画像用。PR-A は未使用だが契約として用意）。
     func withThumbnail(_ thumb: Data?) -> CapturedPayload {
         CapturedPayload(

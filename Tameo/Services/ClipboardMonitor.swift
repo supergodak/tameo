@@ -124,9 +124,14 @@ final class ClipboardMonitor {
     }
 
     /// テキスト表現があればそれを取り込む（各種別捕捉のフォールバック）。
+    /// 内容が色コード（#RGB/#RRGGBB/rgb(...)）なら `.color` へ昇格させる（チップ表示＋色対応アプリへの貼付）。
+    /// `.color` の貼付は content 文字列も併載するため、テキストエディタ等には元の文字列がそのまま貼られる。
     private func textFallback(items: [NSPasteboardItem], source: String?) -> CapturedPayload? {
         for item in items {
             if let text = item.string(forType: .string), !text.isEmpty {
+                if let hex = ColorCode.normalizedHex(from: text) {
+                    return .color(code: text, hex: hex, source: source)
+                }
                 return .text(text, source: source)
             }
         }
