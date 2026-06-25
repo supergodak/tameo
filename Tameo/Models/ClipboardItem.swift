@@ -47,6 +47,9 @@ final class ClipboardItem {
     /// `SearchNormalizer.indexString(...)` で生成（NFKC＋かな畳み込み＋小文字化）。
     var searchIndex: String = ""
 
+    /// ピン留め（お気に入り）。一覧で最上段に固定し、prune の削除対象から除外する。
+    var isPinned: Bool = false
+
     /// 種別の型付きアクセサ（未知値は .text にフォールバック）。
     var kind: ClipKind { ClipKind(rawValue: kindRaw) ?? .text }
 

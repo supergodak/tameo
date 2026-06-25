@@ -67,6 +67,12 @@ final class HistoryStore {
         save()
     }
 
+    /// 項目のピン留め状態を切り替える。ピンは一覧最上段に固定し、prune から保護される。
+    func setPinned(_ item: ClipboardItem, _ pinned: Bool) {
+        item.isPinned = pinned
+        save()
+    }
+
     /// 全履歴を消去（メニューの「履歴をクリア」用）。
     /// 書き込み（insert/delete/save）は本クラスに一本化する設計のため、View直叩きではなくここを呼ぶ。
     func clearAll() {
@@ -120,7 +126,10 @@ final class HistoryStore {
         guard total > maxHistory else { return }
         let d = FetchDescriptor<ClipboardItem>(sortBy: [SortDescriptor(\.lastUsedAt, order: .reverse)])
         guard let items = try? modelContext.fetch(d) else { return }
-        for item in items[maxHistory...] {
+        // ピン留めは削除対象から除外し、上限は「ピン以外」に対して適用する。
+        let unpinned = items.filter { !$0.isPinned }
+        guard unpinned.count > maxHistory else { return }
+        for item in unpinned[maxHistory...] {
             modelContext.delete(item)
         }
     }
