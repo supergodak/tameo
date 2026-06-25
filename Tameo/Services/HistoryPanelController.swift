@@ -16,8 +16,16 @@ final class PaletteModel {
     var pageIndex: Int = 0
     /// 現ページ内で選択中の行（0..9）。
     var rowInPage: Int = 0
-    /// 表示スナップショット（行の多態リスト。`show()` 時のスナップショットで、表示中は不変）。
-    var rows: [PaletteRow] = []
+    /// 全件スナップショット（`show()` 時に固める不変の元データ）。検索/フィルタはこれを絞り込む。
+    var allRows: [PaletteRow] = []
+    /// 検索クエリ（履歴ソースでのみ有効）。
+    var query: String = ""
+    /// 種別フィルタ（空＝全種別）。
+    var typeFilter: Set<ClipKind> = []
+    /// `/` で入る検索モード（クエリ空でも数字をクエリに入れるためのフラグ）。
+    var searchActive: Bool = false
+    /// 検索フィールドへ first responder を移すよう要求するカウンタ（表示時・チップ操作後に増やす）。
+    var focusRequestID: Int = 0
     /// アクセシビリティ権限の有無（バナー表示の判定。`show()` 時に再評価）。
     var accessibilityTrusted: Bool = true
     /// 現在の表示ソース（履歴 / スニペットフォルダ一覧 / フォルダの中身）。
@@ -25,6 +33,34 @@ final class PaletteModel {
     /// スニペット階層の復帰用スタック（フォルダに入った履歴。Esc で 1 階層戻る）。
     /// Clipy のフォルダは入れ子なしのため現状は深さ 1（非空＝フォルダの中身を表示中）。
     var snippetStack: [SnippetFolder] = []
+
+    /// 表示行（導出）。履歴ソースでは種別フィルタ→テキスト検索の順に絞り、ピン留めを最上段へ。
+    /// 履歴以外（スニペット）は `allRows` をそのまま返す（v1では検索/フィルタ対象外）。
+    /// `pageItems`/番号貼付/ページャ/フッタはすべてこの `rows` から導出されるため、絞り込みに自動追従する。
+    var rows: [PaletteRow] {
+        guard case .history = source else { return allRows }
+        var result = allRows
+        if !typeFilter.isEmpty {
+            result = result.filter {
+                if case .history(let item) = $0 { return typeFilter.contains(item.kind) }
+                return false
+            }
+        }
+        let q = SearchNormalizer.normalize(query)
+        if !q.isEmpty {
+            result = result.filter {
+                if case .history(let item) = $0 { return item.searchIndex.contains(q) }
+                return false
+            }
+        }
+        // ピン最上段（安定分割。別セクションにせず単一リストでページャ計算を保つ）。
+        var pinned: [PaletteRow] = []
+        var rest: [PaletteRow] = []
+        for row in result {
+            if case .history(let item) = row, item.isPinned { pinned.append(row) } else { rest.append(row) }
+        }
+        return pinned + rest
+    }
 
     var pageCount: Int {
         max(1, (rows.count + Self.pageSize - 1) / Self.pageSize)
@@ -164,6 +200,8 @@ final class HistoryPanelController {
         installKeyMonitor()
         NSApp.activate()
         panel.makeKeyAndOrderFront(nil)
+        // 履歴では検索フィールドへフォーカスを移す（IME/日本語変換を効かせるため）。
+        if case .history = model.source { model.focusRequestID += 1 }
     }
 
     func hide() {
@@ -177,7 +215,8 @@ final class HistoryPanelController {
     private func loadHistory() {
         model.source = .history
         model.snippetStack.removeAll()
-        model.rows = fetchTopItems().map { PaletteRow.history($0) }
+        model.allRows = fetchTopItems().map { PaletteRow.history($0) }
+        clearSearchState()
         model.reset()
     }
 
@@ -185,7 +224,8 @@ final class HistoryPanelController {
     private func loadSnippetFolders() {
         model.source = .snippetFolders
         model.snippetStack.removeAll()
-        model.rows = snippetStore.enabledFolders().map { PaletteRow.folder($0) }
+        model.allRows = snippetStore.enabledFolders().map { PaletteRow.folder($0) }
+        clearSearchState()
         model.reset()
     }
 
@@ -193,8 +233,16 @@ final class HistoryPanelController {
     private func enterFolder(_ folder: SnippetFolder) {
         model.snippetStack.append(folder)
         model.source = .snippetItems(folder)
-        model.rows = folder.enabledSnippets.map { PaletteRow.snippet($0) }
+        model.allRows = folder.enabledSnippets.map { PaletteRow.snippet($0) }
+        clearSearchState()
         model.reset()
+    }
+
+    /// 検索クエリ・種別フィルタ・検索モードを初期化する（ソース切替時に呼ぶ）。
+    private func clearSearchState() {
+        model.query = ""
+        model.typeFilter = []
+        model.searchActive = false
     }
 
     /// ⇥：History ⇄ Snippets（ルート）を切り替える。
@@ -270,9 +318,19 @@ final class HistoryPanelController {
 
     /// 戻り値 true = 消費（システムへ流さない）。
     private func handleKeyDown(_ event: NSEvent) -> Bool {
+        let isHistory: Bool = { if case .history = model.source { return true }; return false }()
+
+        // IME 変換中（マーク済みテキストあり）は一切横取りせず、すべて検索フィールドへ通す。
+        // 日本語変換・候補選択・英数/かな切替・Esc取消などを IME に委ねる。
+        if isHistory, let editor = panel?.firstResponder as? NSTextView, editor.hasMarkedText() {
+            return false
+        }
+
         switch event.keyCode {
-        case 53: // esc：スニペット階層なら 1 階層戻る、ルートでは閉じる
-            if !model.snippetStack.isEmpty {
+        case 53: // esc：検索/フィルタがあれば先にクリア、次にスニペット階層を戻る、最後に閉じる
+            if isHistory, model.searchActive || !model.query.isEmpty || !model.typeFilter.isEmpty {
+                animated { clearSearchState(); model.reset() }
+            } else if !model.snippetStack.isEmpty {
                 animated { loadSnippetFolders() }
             } else {
                 hide()
@@ -287,6 +345,24 @@ final class HistoryPanelController {
         case 48: animated { switchSource() }; return true                         // ⇥ : History ⇄ Snippets
         case 36, 76: commitSelected(asPlainText: event.modifierFlags.contains(.option)); return true  // ⏎（⌥=平文）
         default: break
+        }
+
+        // ⌘P：選択中の履歴項目のピン留めを切替（ピンは最上段へ移動）。
+        if isHistory,
+           event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command,
+           event.charactersIgnoringModifiers == "p",
+           case .history(let item)? = model.selectedRow {
+            animated { store.setPinned(item, !item.isPinned); model.reset() }
+            return true
+        }
+
+        // `/`：クエリが空のとき検索モードに入る（数字始まり検索を可能にする）。フィールドへは通さない。
+        // 文字・かな・IME 等の通常入力は横取りせず、first responder の検索フィールドが処理する。
+        if isHistory,
+           event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
+           event.characters == "/", model.query.isEmpty, !model.searchActive {
+            model.searchActive = true
+            return true
         }
 
         // 数字キー（1-9, 0）。0 は各ページの 10 行目。Shift も判定対象に含め、⇧+数字の誤爆ペーストを防ぐ。
@@ -312,7 +388,11 @@ final class HistoryPanelController {
             return true
         }
         if mods.isEmpty {
-            // 素の数字: 現ページの該当行を選択して即確定。
+            // 履歴で検索中（モード or クエリ非空）なら数字はクエリへ＝フィールドに通す。
+            if isHistory, model.searchActive || !model.query.isEmpty {
+                return false
+            }
+            // それ以外: 現ページの該当行を選択して即確定（番号クイック貼付）。
             let row = digit == 0 ? 9 : digit - 1
             if row < model.pageItems.count {
                 model.rowInPage = row

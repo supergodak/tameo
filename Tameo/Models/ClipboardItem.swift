@@ -41,8 +41,23 @@ final class ClipboardItem {
     /// サイズ上限超過で原本を破棄した画像か。
     var payloadTruncated: Bool = false
 
+    // MARK: - M5 追加（履歴検索／ピン留め。すべて既定値付き＝lightweight migration 安全）
+
+    /// 検索用の正規化済みインデックス文字列。空＝レガシ行（初回の検索時に backfill）。
+    /// `SearchNormalizer.indexString(...)` で生成（NFKC＋かな畳み込み＋小文字化）。
+    var searchIndex: String = ""
+
+    /// ピン留め（お気に入り）。一覧で最上段に固定し、prune の削除対象から除外する。
+    var isPinned: Bool = false
+
     /// 種別の型付きアクセサ（未知値は .text にフォールバック）。
     var kind: ClipKind { ClipKind(rawValue: kindRaw) ?? .text }
+
+    /// 検索インデックスの生成元テキスト（lazy backfill 用）。本文＋色hex＋ファイルパス。
+    /// 画像の OCR テキストは将来ここに連結する（フック）。
+    var searchableSourceText: String {
+        SearchNormalizer.indexString(content: content, colorHex: colorHex, fileURLStrings: fileURLStrings)
+    }
 
     /// filename の file URL 配列（`fileURLStrings` は absoluteString 群＝改行分割安全）。
     var fileURLs: [URL] {
@@ -63,6 +78,7 @@ final class ClipboardItem {
         self.sourceBundleID = sourceBundleID
         self.isConcealed = isConcealed
         self.byteSize = content.utf8.count
+        self.searchIndex = SearchNormalizer.indexString(content: content)
     }
 
     /// 非テキスト種別を含む取り込み用。`CapturedPayload`（Sendable）から生成する designated init。
@@ -83,5 +99,10 @@ final class ClipboardItem {
         self.fileURLStrings = payload.fileURLStrings
         self.colorHex = payload.colorHex
         self.payloadTruncated = payload.payloadTruncated
+        self.searchIndex = SearchNormalizer.indexString(
+            content: payload.content,
+            colorHex: payload.colorHex,
+            fileURLStrings: payload.fileURLStrings
+        )
     }
 }

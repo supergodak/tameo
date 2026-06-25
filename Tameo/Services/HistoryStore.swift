@@ -67,6 +67,12 @@ final class HistoryStore {
         save()
     }
 
+    /// 項目のピン留め状態を切り替える。ピンは一覧最上段に固定し、prune から保護される。
+    func setPinned(_ item: ClipboardItem, _ pinned: Bool) {
+        item.isPinned = pinned
+        save()
+    }
+
     /// 全履歴を消去（メニューの「履歴をクリア」用）。
     /// 書き込み（insert/delete/save）は本クラスに一本化する設計のため、View直叩きではなくここを呼ぶ。
     func clearAll() {
@@ -79,6 +85,30 @@ final class HistoryStore {
         } catch {
             NSLog("Tameo: clear all failed: %@", String(describing: error))
         }
+    }
+
+    /// 既存（M5前）の全行に検索インデックスを一度だけ補完する。起動時に1回呼ぶ。
+    /// 数百〜数千件規模なら同期パスで十分。`UserDefaults` のフラグで再実行を防ぐ。
+    func backfillSearchIndexIfNeeded() {
+        let key = "tameo.searchIndex.backfilled"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        let d = FetchDescriptor<ClipboardItem>(
+            predicate: #Predicate { $0.searchIndex.isEmpty }
+        )
+        if let items = try? modelContext.fetch(d), !items.isEmpty {
+            for item in items {
+                item.searchIndex = item.searchableSourceText
+            }
+            save()
+        }
+        UserDefaults.standard.set(true, forKey: key)
+    }
+
+    /// 1項目の検索インデックスを必要なら補完する（一覧表示・検索の直前に使う遅延 backfill）。
+    func ensureSearchIndex(_ item: ClipboardItem) {
+        guard item.searchIndex.isEmpty else { return }
+        item.searchIndex = item.searchableSourceText
+        save()
     }
 
     // MARK: - Private
@@ -96,7 +126,10 @@ final class HistoryStore {
         guard total > maxHistory else { return }
         let d = FetchDescriptor<ClipboardItem>(sortBy: [SortDescriptor(\.lastUsedAt, order: .reverse)])
         guard let items = try? modelContext.fetch(d) else { return }
-        for item in items[maxHistory...] {
+        // ピン留めは削除対象から除外し、上限は「ピン以外」に対して適用する。
+        let unpinned = items.filter { !$0.isPinned }
+        guard unpinned.count > maxHistory else { return }
+        for item in unpinned[maxHistory...] {
             modelContext.delete(item)
         }
     }

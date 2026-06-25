@@ -31,6 +31,8 @@ struct TameoApp: App {
             let monitor = ClipboardMonitor(store: store, gate: gate, settings: settings)
             // 起動と同時に監視開始（メニューを開く前から履歴を溜める）。
             monitor.start()
+            // 既存（M5前）の行に検索インデックスを一度だけ補完（UserDefaults でガード）。
+            store.backfillSearchIndexIfNeeded()
 
             let paste = PasteService(gate: gate, settings: settings)
             let panelController = HistoryPanelController(

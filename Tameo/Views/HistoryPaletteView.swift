@@ -6,7 +6,9 @@ import AppKit
 /// 両者の高さがズレて隙間/見切れが出ないようにする。
 enum PaletteMetrics {
     static let width: CGFloat = 360
-    static let baseHeight: CGFloat = 440
+    // 440（ヘッダ＋10行＋プレビュー＋フッタ）＋ 56（履歴の検索/種別バー）。
+    // 検索バーは履歴ソースでのみ描画され、スニペット時はその分が下部スペースに回るだけで破綻しない。
+    static let baseHeight: CGFloat = 496
     /// 権限バナー表示時に縦へ加える分（バナー＋区切り線の高さを上回る値。これで内容が固定高を超えて
     /// 中央寄せ・上下見切れになるのを防ぐ。未許可状態でだけ適用される一時的な増分）。
     static let bannerExtraHeight: CGFloat = 76
@@ -40,6 +42,11 @@ struct HistoryPaletteView: View {
 
             if !model.accessibilityTrusted {
                 accessibilityBanner
+                Divider()
+            }
+
+            if isHistorySource {
+                searchBar
                 Divider()
             }
 
@@ -103,10 +110,10 @@ struct HistoryPaletteView: View {
         }
     }
 
-    /// 空表示の文言（ソース別）。
+    /// 空表示の文言（ソース別）。履歴は検索/フィルタで0件になった場合に区別する。
     private var emptyText: String {
         switch model.source {
-        case .history: return "No history yet"
+        case .history: return model.allRows.isEmpty ? "No history yet" : "No matches"
         case .snippetFolders: return "No snippets yet"
         case .snippetItems: return "This folder is empty"
         }
@@ -115,9 +122,118 @@ struct HistoryPaletteView: View {
     /// フッターのキー凡例（ソース別。→＝入る／←＝出る を文脈で出し分け）。
     private var legend: String {
         switch model.source {
-        case .history: return "⇥ Snippets · 1-0 paste · ⌥# plain · ←/→ page · esc"
+        case .history: return "type to search · 1-0 paste · ⌘P pin · ⌥# plain · esc"
         case .snippetFolders: return "→ open · 1-0 open · ⇥ History · ↑↓ move · esc"
         case .snippetItems: return "← back · 1-0 paste · ↑↓ move · esc"
+        }
+    }
+
+    // MARK: - Search / Type filter（履歴ソースのみ）
+
+    private var isHistorySource: Bool {
+        if case .history = model.source { return true }
+        return false
+    }
+
+    /// 検索バー。実フォーカスを持つ `NSSearchField` を first responder にして IME/日本語変換を効かせる。
+    /// ナビ/確定系キーだけ HistoryPanelController のキーモニタが横取りし、文字・変換はフィールドが処理する。
+    private var searchBar: some View {
+        VStack(spacing: 6) {
+            SearchFieldView(model: model)
+                .frame(height: 22)
+            typeChips
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    private struct TypeChip: Identifiable {
+        let id = UUID()
+        let label: String
+        let symbol: String
+        let kinds: Set<ClipKind>
+    }
+
+    private static let typeChips: [TypeChip] = [
+        .init(label: "Text", symbol: "textformat", kinds: [.text]),
+        .init(label: "Rich", symbol: "doc.richtext", kinds: [.rtf, .rtfd, .pdf]),
+        .init(label: "Image", symbol: "photo", kinds: [.png, .tiff]),
+        .init(label: "File", symbol: "doc", kinds: [.filename]),
+        .init(label: "URL", symbol: "link", kinds: [.url]),
+        .init(label: "Color", symbol: "paintpalette", kinds: [.color]),
+    ]
+
+    private var typeChips: some View {
+        HStack(spacing: 5) {
+            ForEach(Self.typeChips) { chip in
+                let selected = !chip.kinds.isDisjoint(with: model.typeFilter)
+                Button {
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        if selected { model.typeFilter.subtract(chip.kinds) }
+                        else { model.typeFilter.formUnion(chip.kinds) }
+                        model.reset()
+                    }
+                    model.focusRequestID += 1   // クリックで奪われたフォーカスを検索フィールドへ戻す
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: chip.symbol)
+                        Text(chip.label)
+                    }
+                    .font(.caption2)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(selected ? Color.accentColor : Color.secondary.opacity(0.15), in: Capsule())
+                    .foregroundStyle(selected ? Color.white : Color.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    // MARK: - 実フィールド（NSSearchField）で IME を効かせる
+
+    /// IME（日本語変換・英数/かな切替・候補選択）を成立させるため、実フォーカスを持つ NSSearchField を置く。
+    /// テキストはこのフィールドが処理し、`model.query` を駆動する。ナビ/確定系キーはキーモニタ側が横取りする。
+    private struct SearchFieldView: NSViewRepresentable {
+        let model: PaletteModel
+
+        func makeCoordinator() -> Coordinator { Coordinator(model: model) }
+
+        func makeNSView(context: Context) -> NSSearchField {
+            let field = NSSearchField()
+            field.placeholderString = "Type to search…"
+            field.focusRingType = .none
+            field.sendsWholeSearchString = false
+            field.delegate = context.coordinator
+            field.font = .systemFont(ofSize: NSFont.systemFontSize(for: .small))
+            // 生成直後にフォーカス（ウィンドウ装着後に確実化するため次ループで）。
+            DispatchQueue.main.async { [weak field] in field?.window?.makeFirstResponder(field) }
+            return field
+        }
+
+        func updateNSView(_ field: NSSearchField, context: Context) {
+            if field.stringValue != model.query { field.stringValue = model.query }
+            // フォーカス要求が更新されたら first responder に戻す（表示時・チップ操作後）。
+            if context.coordinator.lastFocusID != model.focusRequestID {
+                context.coordinator.lastFocusID = model.focusRequestID
+                DispatchQueue.main.async { [weak field] in field?.window?.makeFirstResponder(field) }
+            }
+        }
+
+        final class Coordinator: NSObject, NSSearchFieldDelegate {
+            let model: PaletteModel
+            var lastFocusID = 0
+            init(model: PaletteModel) { self.model = model }
+
+            func controlTextDidChange(_ note: Notification) {
+                guard let field = note.object as? NSSearchField else { return }
+                let value = field.stringValue
+                withAnimation(.easeOut(duration: 0.12)) {
+                    model.query = value
+                    model.reset()
+                }
+            }
         }
     }
 
@@ -164,6 +280,11 @@ struct HistoryPaletteView: View {
                     .truncationMode(.tail)
                     .foregroundStyle(isSelected ? Color.white : Color.primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                if case .history(let item) = row, item.isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.caption2)
+                        .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
+                }
             }
             .frame(height: Self.rowContentHeight)
             .contentShape(Rectangle())
