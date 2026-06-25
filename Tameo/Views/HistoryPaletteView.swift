@@ -135,31 +135,12 @@ struct HistoryPaletteView: View {
         return false
     }
 
-    /// 検索バー（表示専用）。実フォーカスを持つ TextField は置かず、`model.query` を表示するだけ。
-    /// 入力は HistoryPanelController のキーモニタが拾う（フォーカス争い・resignKey 自動クローズを避ける）。
+    /// 検索バー。実フォーカスを持つ `NSSearchField` を first responder にして IME/日本語変換を効かせる。
+    /// ナビ/確定系キーだけ HistoryPanelController のキーモニタが横取りし、文字・変換はフィールドが処理する。
     private var searchBar: some View {
         VStack(spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if model.query.isEmpty {
-                    Text(model.searchActive ? "Search (numbers ok)…" : "Type to search…")
-                        .font(.callout)
-                        .foregroundStyle(.tertiary)
-                } else {
-                    Text(model.query)
-                        .font(.callout)
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                }
-                Spacer(minLength: 4)
-                if !model.query.isEmpty || !model.typeFilter.isEmpty {
-                    Text("esc clears")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-            }
+            SearchFieldView(model: model)
+                .frame(height: 22)
             typeChips
         }
         .padding(.horizontal, 12)
@@ -192,6 +173,7 @@ struct HistoryPaletteView: View {
                         else { model.typeFilter.formUnion(chip.kinds) }
                         model.reset()
                     }
+                    model.focusRequestID += 1   // クリックで奪われたフォーカスを検索フィールドへ戻す
                 } label: {
                     HStack(spacing: 3) {
                         Image(systemName: chip.symbol)
@@ -206,6 +188,52 @@ struct HistoryPaletteView: View {
                 .buttonStyle(.plain)
             }
             Spacer(minLength: 0)
+        }
+    }
+
+    // MARK: - 実フィールド（NSSearchField）で IME を効かせる
+
+    /// IME（日本語変換・英数/かな切替・候補選択）を成立させるため、実フォーカスを持つ NSSearchField を置く。
+    /// テキストはこのフィールドが処理し、`model.query` を駆動する。ナビ/確定系キーはキーモニタ側が横取りする。
+    private struct SearchFieldView: NSViewRepresentable {
+        let model: PaletteModel
+
+        func makeCoordinator() -> Coordinator { Coordinator(model: model) }
+
+        func makeNSView(context: Context) -> NSSearchField {
+            let field = NSSearchField()
+            field.placeholderString = "Type to search…"
+            field.focusRingType = .none
+            field.sendsWholeSearchString = false
+            field.delegate = context.coordinator
+            field.font = .systemFont(ofSize: NSFont.systemFontSize(for: .small))
+            // 生成直後にフォーカス（ウィンドウ装着後に確実化するため次ループで）。
+            DispatchQueue.main.async { [weak field] in field?.window?.makeFirstResponder(field) }
+            return field
+        }
+
+        func updateNSView(_ field: NSSearchField, context: Context) {
+            if field.stringValue != model.query { field.stringValue = model.query }
+            // フォーカス要求が更新されたら first responder に戻す（表示時・チップ操作後）。
+            if context.coordinator.lastFocusID != model.focusRequestID {
+                context.coordinator.lastFocusID = model.focusRequestID
+                DispatchQueue.main.async { [weak field] in field?.window?.makeFirstResponder(field) }
+            }
+        }
+
+        final class Coordinator: NSObject, NSSearchFieldDelegate {
+            let model: PaletteModel
+            var lastFocusID = 0
+            init(model: PaletteModel) { self.model = model }
+
+            func controlTextDidChange(_ note: Notification) {
+                guard let field = note.object as? NSSearchField else { return }
+                let value = field.stringValue
+                withAnimation(.easeOut(duration: 0.12)) {
+                    model.query = value
+                    model.reset()
+                }
+            }
         }
     }
 

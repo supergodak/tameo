@@ -24,6 +24,8 @@ final class PaletteModel {
     var typeFilter: Set<ClipKind> = []
     /// `/` で入る検索モード（クエリ空でも数字をクエリに入れるためのフラグ）。
     var searchActive: Bool = false
+    /// 検索フィールドへ first responder を移すよう要求するカウンタ（表示時・チップ操作後に増やす）。
+    var focusRequestID: Int = 0
     /// アクセシビリティ権限の有無（バナー表示の判定。`show()` 時に再評価）。
     var accessibilityTrusted: Bool = true
     /// 現在の表示ソース（履歴 / スニペットフォルダ一覧 / フォルダの中身）。
@@ -198,6 +200,8 @@ final class HistoryPanelController {
         installKeyMonitor()
         NSApp.activate()
         panel.makeKeyAndOrderFront(nil)
+        // 履歴では検索フィールドへフォーカスを移す（IME/日本語変換を効かせるため）。
+        if case .history = model.source { model.focusRequestID += 1 }
     }
 
     func hide() {
@@ -316,6 +320,12 @@ final class HistoryPanelController {
     private func handleKeyDown(_ event: NSEvent) -> Bool {
         let isHistory: Bool = { if case .history = model.source { return true }; return false }()
 
+        // IME 変換中（マーク済みテキストあり）は一切横取りせず、すべて検索フィールドへ通す。
+        // 日本語変換・候補選択・英数/かな切替・Esc取消などを IME に委ねる。
+        if isHistory, let editor = panel?.firstResponder as? NSTextView, editor.hasMarkedText() {
+            return false
+        }
+
         switch event.keyCode {
         case 53: // esc：検索/フィルタがあれば先にクリア、次にスニペット階層を戻る、最後に閉じる
             if isHistory, model.searchActive || !model.query.isEmpty || !model.typeFilter.isEmpty {
@@ -326,12 +336,6 @@ final class HistoryPanelController {
                 hide()
             }
             return true
-        case 51: // delete：検索中ならクエリを1字削除（空なら何もしない＝そのまま流す）
-            if isHistory, !model.query.isEmpty {
-                animated { model.query.removeLast(); model.reset() }
-                return true
-            }
-            return false
         case 125: animated { model.moveRow(by: 1) }; return true                  // ↓
         case 126: animated { model.moveRow(by: -1) }; return true                 // ↑
         case 33: animated { model.page(by: -1) }; return true                     // [ : ページ送り（前）
@@ -352,23 +356,13 @@ final class HistoryPanelController {
             return true
         }
 
-        // 検索タイピング（履歴ソースのみ・cmd/opt/ctrl 無しの1文字）。
-        // 数字は「検索中ならクエリへ／非検索なら下の番号貼付へ」。`/` は空のとき検索モードに入る。
+        // `/`：クエリが空のとき検索モードに入る（数字始まり検索を可能にする）。フィールドへは通さない。
+        // 文字・かな・IME 等の通常入力は横取りせず、first responder の検索フィールドが処理する。
         if isHistory,
            event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
-           let typed = event.characters, typed.count == 1,
-           let scalar = typed.unicodeScalars.first, isTypeableForSearch(scalar) {
-            let searching = model.searchActive || !model.query.isEmpty
-            let isDigit = Int(typed) != nil
-            if typed == "/" && !searching {
-                model.searchActive = true
-                return true
-            }
-            if searching || !isDigit {
-                animated { model.query.append(typed); model.reset() }
-                return true
-            }
-            // 非検索かつ素の数字 → 下の番号貼付へフォールスルー
+           event.characters == "/", model.query.isEmpty, !model.searchActive {
+            model.searchActive = true
+            return true
         }
 
         // 数字キー（1-9, 0）。0 は各ページの 10 行目。Shift も判定対象に含め、⇧+数字の誤爆ペーストを防ぐ。
@@ -394,7 +388,11 @@ final class HistoryPanelController {
             return true
         }
         if mods.isEmpty {
-            // 素の数字: 現ページの該当行を選択して即確定。
+            // 履歴で検索中（モード or クエリ非空）なら数字はクエリへ＝フィールドに通す。
+            if isHistory, model.searchActive || !model.query.isEmpty {
+                return false
+            }
+            // それ以外: 現ページの該当行を選択して即確定（番号クイック貼付）。
             let row = digit == 0 ? 9 : digit - 1
             if row < model.pageItems.count {
                 model.rowInPage = row
@@ -403,13 +401,6 @@ final class HistoryPanelController {
             return true
         }
         return false
-    }
-
-    /// 検索クエリに入れてよい1文字か（制御文字・矢印などの私用領域ファンクションキーを除外）。
-    private func isTypeableForSearch(_ scalar: Unicode.Scalar) -> Bool {
-        if scalar.value < 0x20 || scalar.value == 0x7F { return false }   // 制御文字
-        if (0xF700...0xF8FF).contains(scalar.value) { return false }      // 矢印/Fキー等（AppKit 私用領域）
-        return true
     }
 
     // MARK: - Private
