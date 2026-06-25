@@ -81,6 +81,30 @@ final class HistoryStore {
         }
     }
 
+    /// 既存（M5前）の全行に検索インデックスを一度だけ補完する。起動時に1回呼ぶ。
+    /// 数百〜数千件規模なら同期パスで十分。`UserDefaults` のフラグで再実行を防ぐ。
+    func backfillSearchIndexIfNeeded() {
+        let key = "tameo.searchIndex.backfilled"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        let d = FetchDescriptor<ClipboardItem>(
+            predicate: #Predicate { $0.searchIndex.isEmpty }
+        )
+        if let items = try? modelContext.fetch(d), !items.isEmpty {
+            for item in items {
+                item.searchIndex = item.searchableSourceText
+            }
+            save()
+        }
+        UserDefaults.standard.set(true, forKey: key)
+    }
+
+    /// 1項目の検索インデックスを必要なら補完する（一覧表示・検索の直前に使う遅延 backfill）。
+    func ensureSearchIndex(_ item: ClipboardItem) {
+        guard item.searchIndex.isEmpty else { return }
+        item.searchIndex = item.searchableSourceText
+        save()
+    }
+
     // MARK: - Private
 
     private func newestItem() -> ClipboardItem? {
