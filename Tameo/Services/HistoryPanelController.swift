@@ -215,7 +215,9 @@ final class HistoryPanelController {
     private func loadHistory() {
         model.source = .history
         model.snippetStack.removeAll()
-        model.allRows = fetchTopItems().map { PaletteRow.history($0) }
+        let items = fetchTopItems()
+        model.allRows = items.map { PaletteRow.history($0) }
+        store.recognizeMissing(in: items)   // 既存画像の未OCR分を遅延認識（検索可能化）
         clearSearchState()
         model.reset()
     }

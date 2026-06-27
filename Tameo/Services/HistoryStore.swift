@@ -45,6 +45,7 @@ final class HistoryStore {
         modelContext.insert(item)
         prune()
         save()
+        scheduleOCRIfNeeded(item)
     }
 
     /// 既存テキスト経路は薄いラッパとして温存（呼び出し側はバイト等価）。
@@ -64,6 +65,43 @@ final class HistoryStore {
     /// 既存項目を「今使った」ことにして先頭へ（M2のペースト後移動でも使用）。
     func markUsed(_ item: ClipboardItem) {
         item.lastUsedAt = .now
+        save()
+    }
+
+    // MARK: - OCR（画像のオンデバイス文字認識）
+
+    /// OCR 実行中の項目（同一項目の二重実行を防ぐ）。
+    private var ocrInFlight: Set<PersistentIdentifier> = []
+
+    /// 画像項目に対してバックグラウンドで OCR を起動する（設定ON・未処理・データありのみ）。
+    /// 取り込みは止めず、完了後に `ocrText` と `searchIndex` を更新する。
+    func scheduleOCRIfNeeded(_ item: ClipboardItem) {
+        guard settings.ocrEnabled, item.kind.isImage, !item.ocrProcessed else { return }
+        guard let data = item.payloadData ?? item.thumbnailPNG else { return }
+        let id = item.persistentModelID
+        guard !ocrInFlight.contains(id) else { return }
+        ocrInFlight.insert(id)
+        Task { [weak self] in
+            let text = await OCRService.recognizeText(in: data)
+            self?.applyOCR(id: id, text: text ?? "")
+        }
+    }
+
+    /// 渡された一覧のうち未処理の画像に遅延 OCR をかける（パレット表示時の既存画像補完）。
+    func recognizeMissing(in items: [ClipboardItem]) {
+        guard settings.ocrEnabled else { return }
+        for item in items where item.kind.isImage && !item.ocrProcessed {
+            scheduleOCRIfNeeded(item)
+        }
+    }
+
+    /// OCR 結果を反映（detached からは ID だけ渡し、ここで引き直して書き込む＝アクター越え安全）。
+    private func applyOCR(id: PersistentIdentifier, text: String) {
+        ocrInFlight.remove(id)
+        guard let item = modelContext.model(for: id) as? ClipboardItem else { return }
+        item.ocrText = text
+        item.ocrProcessed = true
+        item.searchIndex = item.searchableSourceText
         save()
     }
 
