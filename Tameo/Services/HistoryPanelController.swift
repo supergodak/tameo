@@ -421,7 +421,12 @@ final class HistoryPanelController {
         case .history(let item):
             hide()
             store.markUsed(item)
-            paste.paste(item, asPlainText: asPlainText, to: targetApp)
+            // 画像 ＋ ⌥（平文）＋ OCRテキストあり → 画像でなく認識テキストを貼る。
+            if asPlainText, item.kind.isImage, !item.ocrText.isEmpty {
+                paste.pasteText(item.ocrText, to: targetApp)
+            } else {
+                paste.paste(item, asPlainText: asPlainText, to: targetApp)
+            }
         case .snippet(let snippet):
             hide()
             // スニペット本文は元から平文。pasteText は gate を通すので履歴を汚染しない。

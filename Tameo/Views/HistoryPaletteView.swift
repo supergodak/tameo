@@ -381,6 +381,8 @@ struct HistoryPaletteView: View {
         guard let row = model.selectedRow else { return "" }
         switch row {
         case .history(let item):
+            // 画像はOCRテキストがあればそれを表示（⌥ でテキストとして貼れることの示唆）。
+            if item.kind.isImage, !item.ocrText.isEmpty { return item.ocrText }
             return item.content
         case .snippet(let snippet):
             return snippet.content
