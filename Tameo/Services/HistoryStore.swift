@@ -73,26 +73,45 @@ final class HistoryStore {
     /// OCR 実行中の項目（同一項目の二重実行を防ぐ）。
     private var ocrInFlight: Set<PersistentIdentifier> = []
 
-    /// 画像項目に対してバックグラウンドで OCR を起動する（設定ON・未処理・データありのみ）。
+    /// 画像（ピクセル）／画像ファイルを指す filename に対してバックグラウンドで OCR を起動する。
     /// 取り込みは止めず、完了後に `ocrText` と `searchIndex` を更新する。
     func scheduleOCRIfNeeded(_ item: ClipboardItem) {
-        guard settings.ocrEnabled, item.kind.isImage, !item.ocrProcessed else { return }
-        guard let data = item.payloadData ?? item.thumbnailPNG else { return }
+        guard settings.ocrEnabled, !item.ocrProcessed else { return }
         let id = item.persistentModelID
         guard !ocrInFlight.contains(id) else { return }
-        ocrInFlight.insert(id)
-        Task { [weak self] in
-            let text = await OCRService.recognizeText(in: data)
-            self?.applyOCR(id: id, text: text ?? "")
+
+        if item.kind.isImage {
+            // 画像ピクセル（png/tiff）: 原本（無ければサムネ）をOCR。
+            guard let data = item.payloadData ?? item.thumbnailPNG else { return }
+            ocrInFlight.insert(id)
+            Task { [weak self] in
+                let text = await OCRService.recognizeText(in: data)
+                self?.applyOCR(id: id, text: text ?? "")
+            }
+        } else if item.kind == .filename, let url = item.fileURLs.first(where: Self.isImageFile) {
+            // コピーされたパスが画像ファイルを指す: そのファイルを読んでOCR（スクショのファイルコピー対応）。
+            ocrInFlight.insert(id)
+            Task { [weak self] in
+                let text = await OCRService.recognizeText(inFileAt: url)
+                self?.applyOCR(id: id, text: text ?? "")
+            }
         }
     }
 
-    /// 渡された一覧のうち未処理の画像に遅延 OCR をかける（パレット表示時の既存画像補完）。
+    /// 渡された一覧のうち未処理項目に遅延 OCR をかける（種別判定は scheduleOCRIfNeeded 内）。
     func recognizeMissing(in items: [ClipboardItem]) {
         guard settings.ocrEnabled else { return }
-        for item in items where item.kind.isImage && !item.ocrProcessed {
+        for item in items where !item.ocrProcessed {
             scheduleOCRIfNeeded(item)
         }
+    }
+
+    /// OCR 対象とみなす画像ファイル拡張子。
+    private static let imageFileExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "tiff", "tif", "gif", "bmp", "heic", "heif", "webp",
+    ]
+    private static func isImageFile(_ url: URL) -> Bool {
+        imageFileExtensions.contains(url.pathExtension.lowercased())
     }
 
     /// OCR 結果を反映（detached からは ID だけ渡し、ここで引き直して書き込む＝アクター越え安全）。
