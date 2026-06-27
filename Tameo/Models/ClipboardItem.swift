@@ -50,13 +50,18 @@ final class ClipboardItem {
     /// ピン留め（お気に入り）。一覧で最上段に固定し、prune の削除対象から除外する。
     var isPinned: Bool = false
 
+    /// 画像のオンデバイス OCR で認識したテキスト（非画像・未認識は空）。検索・テキスト貼付に使う。
+    var ocrText: String = ""
+    /// OCR を試行済みか（未認識でも true）。再OCRの抑止に使う。
+    var ocrProcessed: Bool = false
+
     /// 種別の型付きアクセサ（未知値は .text にフォールバック）。
     var kind: ClipKind { ClipKind(rawValue: kindRaw) ?? .text }
 
-    /// 検索インデックスの生成元テキスト（lazy backfill 用）。本文＋色hex＋ファイルパス。
-    /// 画像の OCR テキストは将来ここに連結する（フック）。
+    /// 検索インデックスの生成元テキスト（lazy backfill 用）。本文＋色hex＋ファイルパス＋画像OCRテキスト。
     var searchableSourceText: String {
-        SearchNormalizer.indexString(content: content, colorHex: colorHex, fileURLStrings: fileURLStrings)
+        SearchNormalizer.indexString(content: content, colorHex: colorHex,
+                                     fileURLStrings: fileURLStrings, ocrText: ocrText)
     }
 
     /// filename の file URL 配列（`fileURLStrings` は absoluteString 群＝改行分割安全）。
