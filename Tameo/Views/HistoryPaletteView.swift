@@ -364,16 +364,29 @@ struct HistoryPaletteView: View {
     /// 選択は `model.selectedRow`＝`pageIndex`/`rowInPage` から導出されるので、
     /// ↑↓・数字・ページ送りで移動すると自動で更新される。
     private var preview: some View {
-        Text(previewText)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(3)
-            .truncationMode(.tail)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .frame(height: 52)
-            .background(Color.secondary.opacity(0.06))
+        VStack(alignment: .leading, spacing: 2) {
+            if selectedHasOCRText {
+                Label("⌥⏎ to paste as text", systemImage: "text.viewfinder")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Text(previewText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(selectedHasOCRText ? 2 : 3)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .frame(height: 52)
+        .background(Color.secondary.opacity(0.06))
+    }
+
+    /// 選択中の履歴項目が OCR テキストを持つか（⌥⏎ ヒント表示の判定）。
+    private var selectedHasOCRText: Bool {
+        if case .history(let item)? = model.selectedRow { return !item.ocrText.isEmpty }
+        return false
     }
 
     /// プレビュー本文。履歴/スニペットは内容、フォルダは有効スニペット数。

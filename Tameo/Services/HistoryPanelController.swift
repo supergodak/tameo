@@ -421,8 +421,9 @@ final class HistoryPanelController {
         case .history(let item):
             hide()
             store.markUsed(item)
-            // 画像 ＋ ⌥（平文）＋ OCRテキストあり → 画像でなく認識テキストを貼る。
-            if asPlainText, item.kind.isImage, !item.ocrText.isEmpty {
+            // ⌥（平文）＋ OCRテキストあり → 画像/パスでなく認識テキストを貼る。
+            // 画像ピクセル(png/tiff)・画像ファイルを指す filename の両方を対象にする。
+            if asPlainText, !item.ocrText.isEmpty {
                 paste.pasteText(item.ocrText, to: targetApp)
             } else {
                 paste.paste(item, asPlainText: asPlainText, to: targetApp)
