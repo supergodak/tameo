@@ -164,7 +164,7 @@ struct HistoryPaletteView: View {
     ]
 
     private var typeChips: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 4) {
             ForEach(Self.typeChips) { chip in
                 let selected = !chip.kinds.isDisjoint(with: model.typeFilter)
                 Button {
@@ -178,9 +178,11 @@ struct HistoryPaletteView: View {
                     HStack(spacing: 3) {
                         Image(systemName: chip.symbol)
                         Text(chip.label)
+                            .lineLimit(1)
+                            .fixedSize()
                     }
                     .font(.caption2)
-                    .padding(.horizontal, 7)
+                    .padding(.horizontal, 6)
                     .padding(.vertical, 3)
                     .background(selected ? Color.accentColor : Color.secondary.opacity(0.15), in: Capsule())
                     .foregroundStyle(selected ? Color.white : Color.secondary)
