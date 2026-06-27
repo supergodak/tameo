@@ -1,11 +1,11 @@
 import SwiftUI
 import SwiftData
+import AppKit
 
 /// メニューバーから開くポップオーバーの中身。
 /// macOS 標準メニュー風に縦並び：ヘッダ → 履歴一覧 → アクション行（フル幅・ホバーで淡くハイライト）。
 struct MenuBarContentView: View {
     @Environment(HistoryStore.self) private var store
-    @State private var confirmClear = false
 
     /// 履歴パレットを開く（ホットキー以外の導線。未設定なら非表示）。
     var onOpenPalette: (() -> Void)? = nil
@@ -49,7 +49,7 @@ struct MenuBarContentView: View {
 
                 Divider().padding(.horizontal, 8).padding(.vertical, 3)
 
-                MenuActionRow(title: "Clear History") { confirmClear = true }
+                MenuActionRow(title: "Clear History") { confirmClearHistory() }
                 if let onCheckForUpdates {
                     MenuActionRow(title: "Check for Updates…") { onCheckForUpdates() }
                 }
@@ -66,11 +66,21 @@ struct MenuBarContentView: View {
             .padding(.vertical, 6)
         }
         .frame(width: 300)
-        .confirmationDialog("Clear all history?", isPresented: $confirmClear, titleVisibility: .visible) {
-            Button("Clear", role: .destructive) {
-                store.clearAll()
-            }
-            Button("Cancel", role: .cancel) { }
+    }
+
+    /// 履歴全消去の確認。MenuBarExtra(.window) では SwiftUI の confirmationDialog が
+    /// メニュー窓の消失で表示されないため、メニュー窓に依存しない NSAlert（モーダル）で確認する。
+    private func confirmClearHistory() {
+        let alert = NSAlert()
+        alert.messageText = "Clear all history?"
+        alert.informativeText = "This removes all saved clipboard items. This can't be undone."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Cancel")             // 既定（Enter / Esc で取消）
+        let clearButton = alert.addButton(withTitle: "Clear")
+        clearButton.hasDestructiveAction = true
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertSecondButtonReturn {
+            store.clearAll()
         }
     }
 

@@ -29,11 +29,14 @@ enum SearchNormalizer {
     }
 
     /// 保存項目の検索インデックス文字列。
-    /// 本文に加えて色hex・ファイルパスも対象に含め、`#2D7DD2` や `/Users/...` でも引けるようにする。
-    static func indexString(content: String, colorHex: String = "", fileURLStrings: String = "") -> String {
+    /// 本文に加えて色hex・ファイルパス・画像のOCRテキストも対象に含め、`#2D7DD2` や `/Users/...`、
+    /// スクショ内の文字でも引けるようにする。
+    static func indexString(content: String, colorHex: String = "", fileURLStrings: String = "",
+                            ocrText: String = "") -> String {
         var parts = [content]
         if !colorHex.isEmpty { parts.append(colorHex) }
         if !fileURLStrings.isEmpty { parts.append(fileURLStrings) }
+        if !ocrText.isEmpty { parts.append(ocrText) }
         let joined = parts.joined(separator: " ")
         let capped = joined.count > maxSourceLength ? String(joined.prefix(maxSourceLength)) : joined
         return normalize(capped)

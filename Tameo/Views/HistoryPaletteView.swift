@@ -164,7 +164,7 @@ struct HistoryPaletteView: View {
     ]
 
     private var typeChips: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 4) {
             ForEach(Self.typeChips) { chip in
                 let selected = !chip.kinds.isDisjoint(with: model.typeFilter)
                 Button {
@@ -178,9 +178,11 @@ struct HistoryPaletteView: View {
                     HStack(spacing: 3) {
                         Image(systemName: chip.symbol)
                         Text(chip.label)
+                            .lineLimit(1)
+                            .fixedSize()
                     }
                     .font(.caption2)
-                    .padding(.horizontal, 7)
+                    .padding(.horizontal, 6)
                     .padding(.vertical, 3)
                     .background(selected ? Color.accentColor : Color.secondary.opacity(0.15), in: Capsule())
                     .foregroundStyle(selected ? Color.white : Color.secondary)
@@ -364,16 +366,29 @@ struct HistoryPaletteView: View {
     /// 選択は `model.selectedRow`＝`pageIndex`/`rowInPage` から導出されるので、
     /// ↑↓・数字・ページ送りで移動すると自動で更新される。
     private var preview: some View {
-        Text(previewText)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(3)
-            .truncationMode(.tail)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .frame(height: 52)
-            .background(Color.secondary.opacity(0.06))
+        VStack(alignment: .leading, spacing: 2) {
+            if selectedHasOCRText {
+                Label("⌥⏎ to paste as text", systemImage: "text.viewfinder")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Text(previewText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(selectedHasOCRText ? 2 : 3)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .frame(height: 52)
+        .background(Color.secondary.opacity(0.06))
+    }
+
+    /// 選択中の履歴項目が OCR テキストを持つか（⌥⏎ ヒント表示の判定）。
+    private var selectedHasOCRText: Bool {
+        if case .history(let item)? = model.selectedRow { return !item.ocrText.isEmpty }
+        return false
     }
 
     /// プレビュー本文。履歴/スニペットは内容、フォルダは有効スニペット数。
@@ -381,6 +396,8 @@ struct HistoryPaletteView: View {
         guard let row = model.selectedRow else { return "" }
         switch row {
         case .history(let item):
+            // 画像はOCRテキストがあればそれを表示（⌥ でテキストとして貼れることの示唆）。
+            if item.kind.isImage, !item.ocrText.isEmpty { return item.ocrText }
             return item.content
         case .snippet(let snippet):
             return snippet.content

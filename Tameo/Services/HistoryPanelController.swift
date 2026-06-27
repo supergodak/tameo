@@ -215,7 +215,9 @@ final class HistoryPanelController {
     private func loadHistory() {
         model.source = .history
         model.snippetStack.removeAll()
-        model.allRows = fetchTopItems().map { PaletteRow.history($0) }
+        let items = fetchTopItems()
+        model.allRows = items.map { PaletteRow.history($0) }
+        store.recognizeMissing(in: items)   // 既存画像の未OCR分を遅延認識（検索可能化）
         clearSearchState()
         model.reset()
     }
@@ -419,7 +421,13 @@ final class HistoryPanelController {
         case .history(let item):
             hide()
             store.markUsed(item)
-            paste.paste(item, asPlainText: asPlainText, to: targetApp)
+            // ⌥（平文）＋ OCRテキストあり → 画像/パスでなく認識テキストを貼る。
+            // 画像ピクセル(png/tiff)・画像ファイルを指す filename の両方を対象にする。
+            if asPlainText, !item.ocrText.isEmpty {
+                paste.pasteText(item.ocrText, to: targetApp)
+            } else {
+                paste.paste(item, asPlainText: asPlainText, to: targetApp)
+            }
         case .snippet(let snippet):
             hide()
             // スニペット本文は元から平文。pasteText は gate を通すので履歴を汚染しない。

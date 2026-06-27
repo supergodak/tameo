@@ -35,6 +35,18 @@ struct TypesSettingsTab: View {
             }
 
             Section {
+                Toggle("Recognize text in images (OCR)", isOn: $settings.ocrEnabled)
+            } header: {
+                Text("Text recognition")
+            } footer: {
+                if settings.ocrEnabled {
+                    Text("Copied images are scanned on-device (Apple Vision) so you can search them by their text and paste the recognized text with ⌥. Nothing leaves your Mac.")
+                } else {
+                    Text("Images won't be scanned. You can still store and paste them, but not search by their contents.")
+                }
+            }
+
+            Section {
                 Toggle("Skip password-manager items", isOn: $settings.ignoreConcealed)
             } header: {
                 Text("Privacy")

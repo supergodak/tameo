@@ -12,4 +12,7 @@ enum ClipKind: String, Codable, CaseIterable {
     case filename
     case url
     case color
+
+    /// 画像種別（OCR対象）。
+    var isImage: Bool { self == .png || self == .tiff }
 }
