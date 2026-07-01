@@ -25,20 +25,21 @@ final class HistoryStore {
 
         let hash = ContentHash.sha256Hex(payload.canonicalBytes)
 
-        if let newest = newestItem() {
-            // レガシ行（M3 前）は contentHash が空。比較前に一度だけ補完する
-            // （アップグレード後の初回再コピーで重複が出るのを全移行なしで防ぐ）。
-            if newest.contentHash.isEmpty {
-                newest.contentHash = ContentHash.sha256Hex(canonicalBytes(of: newest))
-            }
-            // 種別が一致し、かつ内容ハッシュも一致するときだけ重複とみなす。
-            // 同じパス文字列でも「テキスト行」と「実ファイルの filename 行」は別物として扱い、
-            // ハッシュ衝突で filename 捕捉（アイコン/ファイル参照）を取りこぼさない。
-            if newest.kindRaw == payload.kind.rawValue, newest.contentHash == hash {
-                newest.lastUsedAt = .now
-                save()
-                return
-            }
+        // レガシ行（M3 前）は contentHash が空。全体検索の前に最新行だけ一度補完する
+        // （アップグレード後の初回再コピーで重複が出るのを全移行なしで防ぐ）。
+        if let newest = newestItem(), newest.contentHash.isEmpty {
+            newest.contentHash = ContentHash.sha256Hex(canonicalBytes(of: newest))
+        }
+
+        // 全体重複排除（bump-to-top）: 履歴の「どこか」に同種別・同内容の既存項目があれば、
+        // 新規行を作らず既存項目を「今使った」ことにして先頭へ繰り上げる（Clipy 相当）。
+        // 直前1件だけでなく全体を見るので、A→B→A のように別物を挟んだ再コピーでも重複しない。
+        // 種別も一致条件に含めるため、同じパス文字列でも「テキスト行」と「実ファイルの filename 行」は
+        // 別物として扱い、ハッシュ衝突で filename 捕捉（アイコン/ファイル参照）を取りこぼさない。
+        if let existing = existingItem(kindRaw: payload.kind.rawValue, contentHash: hash) {
+            existing.lastUsedAt = .now
+            save()
+            return
         }
 
         let item = ClipboardItem(payload: payload, contentHash: hash)
@@ -161,6 +162,37 @@ final class HistoryStore {
         UserDefaults.standard.set(true, forKey: key)
     }
 
+    /// 既存履歴に溜まった重複行を一度だけ掃除する（bump-to-top 導入前に積まれた分の後始末）。起動時に1回呼ぶ。
+    /// 同種別・同内容ハッシュのグループごとに最新1件だけ残し、古い重複は削除する（ピン留めは削除しない）。
+    /// レガシ行は contentHash が空なので、グループ化の前に必ず補完する（空同士の誤マージを防ぐ）。
+    func dedupeExistingHistoryIfNeeded() {
+        let key = "tameo.history.deduped.v1"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        defer { UserDefaults.standard.set(true, forKey: key) }
+
+        // 新しい順に走査し、初めて見た (種別+ハッシュ) を残し、以降の同一キーは削除する。
+        let d = FetchDescriptor<ClipboardItem>(sortBy: [SortDescriptor(\.lastUsedAt, order: .reverse)])
+        guard let items = try? modelContext.fetch(d) else { return }
+
+        var seen = Set<String>()
+        var removed = 0
+        for item in items {
+            if item.contentHash.isEmpty {
+                item.contentHash = ContentHash.sha256Hex(canonicalBytes(of: item))
+            }
+            let groupKey = item.kindRaw + "\u{0}" + item.contentHash
+            if seen.contains(groupKey) {
+                // 既に同一内容のより新しい行を残している。古い重複を削除（ただしピンは温存）。
+                if item.isPinned { continue }
+                modelContext.delete(item)
+                removed += 1
+            } else {
+                seen.insert(groupKey)
+            }
+        }
+        if removed > 0 { save() }
+    }
+
     /// 1項目の検索インデックスを必要なら補完する（一覧表示・検索の直前に使う遅延 backfill）。
     func ensureSearchIndex(_ item: ClipboardItem) {
         guard item.searchIndex.isEmpty else { return }
@@ -172,6 +204,17 @@ final class HistoryStore {
 
     private func newestItem() -> ClipboardItem? {
         var d = FetchDescriptor<ClipboardItem>(sortBy: [SortDescriptor(\.lastUsedAt, order: .reverse)])
+        d.fetchLimit = 1
+        return try? modelContext.fetch(d).first
+    }
+
+    /// 履歴全体から、種別と内容ハッシュが一致する既存項目を1件だけ引く（bump-to-top の重複検出）。
+    /// インデックス的にはハッシュ等価フィルタで DB 側に絞らせ、全件フェッチを避ける。
+    private func existingItem(kindRaw: String, contentHash: String) -> ClipboardItem? {
+        var d = FetchDescriptor<ClipboardItem>(
+            predicate: #Predicate { $0.kindRaw == kindRaw && $0.contentHash == contentHash },
+            sortBy: [SortDescriptor(\.lastUsedAt, order: .reverse)]
+        )
         d.fetchLimit = 1
         return try? modelContext.fetch(d).first
     }

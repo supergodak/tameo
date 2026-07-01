@@ -33,6 +33,8 @@ struct TameoApp: App {
             monitor.start()
             // 既存（M5前）の行に検索インデックスを一度だけ補完（UserDefaults でガード）。
             store.backfillSearchIndexIfNeeded()
+            // 全体重複排除の導入前に溜まった重複行を一度だけ掃除（UserDefaults でガード）。
+            store.dedupeExistingHistoryIfNeeded()
 
             let paste = PasteService(gate: gate, settings: settings)
             let panelController = HistoryPanelController(

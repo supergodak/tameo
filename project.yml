@@ -10,7 +10,7 @@ options:
 
 settings:
   base:
-    MARKETING_VERSION: "0.1.5"          # 人が読む版。意味のある変更で手動更新（セマンティック）
+    MARKETING_VERSION: "0.1.6"          # 人が読む版。意味のある変更で手動更新（セマンティック）
     CURRENT_PROJECT_VERSION: "1"        # ビルド番号の既定。日常ビルドは scripts/build-app.sh が git コミット数で上書き
     SWIFT_VERSION: "5.0"            # TODO: 実装が安定したら Swift 6 言語モードへ
     DEVELOPMENT_TEAM: "8NY87P5TYV"  # ATI K.K. (Apple Developer Program / org)。署名身元の安定 = 権限保持に必須
