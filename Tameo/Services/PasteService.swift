@@ -156,7 +156,21 @@ final class PasteService: PasteServicing {
     /// 対象アプリが前面に戻るのを待ってから Cmd+V を送出する（タイムアウトで強制送出）。
     private static func postCommandV(virtualKey: CGKeyCode, whenFrontmost target: NSRunningApplication, attemptsLeft: Int) {
         let isFront = NSWorkspace.shared.frontmostApplication?.processIdentifier == target.processIdentifier
-        if isFront || attemptsLeft <= 0 {
+        if isFront {
+            // 対象が前面に戻っても、テキスト入力欄のフォーカス復帰は一拍遅れることがある。
+            // 特にブラウザの web テキスト領域（DOM フォーカス）は復帰が遅く、早すぎる Cmd+V を
+            // 取りこぼす（＝何も貼られない）。ネイティブアプリは即復帰なので体感差はほぼ無い。
+            // 前面確認後に短い settle を1回だけ入れてから送出する。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                // settle 中にユーザーが別ウィンドウへ移った場合は誤爆になるため送出を中止する。
+                // （タイムアウト経路の強制送出は前面判定が効かないアプリ向けの意図的フォールバックとして温存）
+                guard NSWorkspace.shared.frontmostApplication?.processIdentifier
+                        == target.processIdentifier else { return }
+                postCommandV(virtualKey: virtualKey)
+            }
+            return
+        }
+        if attemptsLeft <= 0 {
             postCommandV(virtualKey: virtualKey)
             return
         }
