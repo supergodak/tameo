@@ -156,6 +156,8 @@ final class HistoryPanelController {
     private var keyMonitor: Any?
     /// パネルが key を失ったら自動で閉じるための通知監視トークン。
     private var resignObserver: Any?
+    /// 表示中だけ有効な「パネル外クリック」監視トークン（key になれない時の閉じ保険）。
+    private var outsideClickMonitor: Any?
     /// ホットキー発火時点の前面アプリ（＝貼り付け対象）。
     private var targetApp: NSRunningApplication?
 
@@ -198,14 +200,24 @@ final class HistoryPanelController {
         ))
         positionAtMouse(panel)   // 開くたびにカーソル位置へ（Clipy流。視線/マウス移動を最小化）
         installKeyMonitor()
+        installOutsideClickMonitor()
         NSApp.activate()
         panel.makeKeyAndOrderFront(nil)
         // 履歴では検索フィールドへフォーカスを移す（IME/日本語変換を効かせるため）。
         if case .history = model.source { model.focusRequestID += 1 }
+        // (2) key 再取得リトライ: セキュアな自動入力ポップアップ等でキーを掴めなかった時、
+        // 次のランループで一度だけ再アクティブ化＆makeKey を試みる（掴める状況なら掴む）。
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let panel = self.panel, panel.isVisible, !panel.isKeyWindow else { return }
+            NSApp.activate()
+            panel.makeKey()
+            if case .history = self.model.source { self.model.focusRequestID += 1 }
+        }
     }
 
     func hide() {
         removeKeyMonitor()
+        removeOutsideClickMonitor()
         panel?.orderOut(nil)
     }
 
@@ -310,6 +322,25 @@ final class HistoryPanelController {
         if let keyMonitor {
             NSEvent.removeMonitor(keyMonitor)
             self.keyMonitor = nil
+        }
+    }
+
+    /// (1) 閉じ保険: 表示中だけ、パレット外の左/右クリックで閉じる。
+    /// グローバルモニタは他アプリ/デスクトップに配送されるクリックのみ受け取る（＝パレット外クリック）。
+    /// パネルがキーになれず resignKey が来ない状況でも確実に閉じられる。
+    private func installOutsideClickMonitor() {
+        guard outsideClickMonitor == nil else { return }
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.hide() }
+        }
+    }
+
+    private func removeOutsideClickMonitor() {
+        if let outsideClickMonitor {
+            NSEvent.removeMonitor(outsideClickMonitor)
+            self.outsideClickMonitor = nil
         }
     }
 
