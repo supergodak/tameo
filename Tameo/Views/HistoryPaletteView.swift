@@ -338,7 +338,7 @@ struct HistoryPaletteView: View {
                     .foregroundStyle(isSelected ? Color.white : Color.secondary)
             }
         case .pdf:
-            Image(systemName: "doc.richtext")
+            Image(systemName: "doc.text.image")
                 .foregroundStyle(isSelected ? Color.white : Color.secondary)
         case .color:
             RoundedRectangle(cornerRadius: 3)
@@ -348,7 +348,9 @@ struct HistoryPaletteView: View {
             Image(systemName: "link")
                 .foregroundStyle(isSelected ? Color.white : Color.secondary)
         case .rtf, .rtfd:
-            Image(systemName: "textformat")
+            // 種別チップの Rich と同じ記号に揃える。以前は "textformat"(Aa) だったが、
+            // チップ側では Aa が Text を意味するため「行の Aa ＝リッチ」と読みが衝突していた。
+            Image(systemName: "doc.richtext")
                 .foregroundStyle(isSelected ? Color.white : Color.secondary)
         case .text:
             EmptyView()
