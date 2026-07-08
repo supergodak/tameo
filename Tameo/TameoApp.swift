@@ -18,9 +18,17 @@ struct TameoApp: App {
 
     init() {
         do {
+            // 専用ストアパスを明示指定する（重要）。設定なしの ModelContainer(for:) は全アプリ共用の
+            // ~/Library/Application Support/default.store に書き、他アプリ／Appleエージェント
+            // （icloudmailagent 等）が同じストアを開くと軽量マイグレーションで当方のデータが削除される
+            // （2026-07-08 に実発生：履歴・スニペット全消失）。詳細と旧ストアからの一度きり移行は StoreLocation を参照。
+            let storeURL = try StoreLocation.dedicatedStoreURL()
+            StoreLocation.migrateLegacyDefaultStoreIfNeeded(to: storeURL)
             // 履歴に加えスニペット2モデルを同一ストアへ。既定値付きフィールドのみのため
             // 既存 ClipboardItem データはエンティティ追加だけで無傷（lightweight migration）。
-            let container = try ModelContainer(for: ClipboardItem.self, SnippetFolder.self, Snippet.self)
+            let container = try ModelContainer(
+                for: ClipboardItem.self, SnippetFolder.self, Snippet.self,
+                configurations: ModelConfiguration(url: storeURL))
             // スカラ設定の真実源（履歴数・ソート順・⌘V自動入力・ログイン時起動）。消費側へ注入する。
             let settings = SettingsStore()
             let store = HistoryStore(modelContext: container.mainContext, settings: settings)
