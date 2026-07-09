@@ -16,6 +16,7 @@ struct TypesSettingsTab: View {
         Form {
             Section {
                 Toggle("Plain text", isOn: $settings.storeText)
+                    .accessibilityIdentifier("toggle.storeText")
                 Toggle("Rich text (RTF / RTFD)", isOn: $settings.storeRichText)
                 Toggle("PDF", isOn: $settings.storePDF)
                 Toggle("Images (PNG / TIFF)", isOn: $settings.storeImage)

@@ -39,6 +39,48 @@ targets:
       - package: KeyboardShortcuts # グローバルホットキー（M2）
       - package: Sparkle           # 自動更新（appcast: tameo.ati-mirai.co.jp/appcast.xml）
 
+  # 層1: ロジック/統合テスト（@testable import Tameo・インメモリSwiftData・隔離UserDefaults）。
+  TameoTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: TameoTests
+    dependencies:
+      - target: Tameo
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: jp.co.ati-mirai.tameoTests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Tameo.app/Contents/MacOS/Tameo"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
+  # 層2: 設定ウィンドウのUI駆動テスト（XCUITest。--uitest 起動でSparkle等を止め、設定を開く）。
+  TameoUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: TameoUITests
+    dependencies:
+      - target: Tameo
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: jp.co.ati-mirai.tameoUITests
+        GENERATE_INFOPLIST_FILE: YES
+
+# `xcodebuild test -scheme Tameo` で両テストターゲットが走るよう、テストアクションを明示する。
+schemes:
+  Tameo:
+    build:
+      targets:
+        Tameo: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - TameoTests
+        - TameoUITests
+
 packages:
   Sauce:
     url: https://github.com/Clipy/Sauce

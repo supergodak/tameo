@@ -9,7 +9,9 @@ struct GeneralSettingsTab: View {
         Form {
             Section {
                 Toggle("Launch at login", isOn: $settings.launchAtLogin)
+                    .accessibilityIdentifier("toggle.launchAtLogin")
                 Toggle("Press ⌘V automatically after selecting", isOn: $settings.inputPasteCommand)
+                    .accessibilityIdentifier("toggle.autoPaste")
             } header: {
                 Text("Startup & Paste")
             } footer: {
