@@ -13,7 +13,7 @@
 > **Released and in active use.** Signed with a Developer ID, notarized by Apple, and auto-updating via Sparkle. Install the [latest release](https://github.com/supergodak/tameo/releases/latest) or `brew install --cask supergodak/tap/tameo`.
 > 状態: **公開・実用中。** Developer ID 署名＋Apple 公証済み、Sparkle で自動更新。[最新版](https://github.com/supergodak/tameo/releases/latest) または `brew install --cask supergodak/tap/tameo` で導入できます。
 
-🌐 Website: https://tameo.ati-mirai.co.jp  ·  📜 [Privacy Policy](PRIVACY.md)  ·  ⚖️ [MIT License](LICENSE)  ·  🍎 macOS 14+
+🌐 Website: https://tameo.ati-mirai.co.jp  ·  📜 [Privacy Policy](PRIVACY.md)  ·  ⚖️ [MIT License](LICENSE)  ·  🍎 macOS 14+  ·  🔎 [On AlternativeTo](https://alternativeto.net/software/tameo/)
 
 ---
 
