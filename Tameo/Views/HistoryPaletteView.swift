@@ -6,9 +6,10 @@ import AppKit
 /// 両者の高さがズレて隙間/見切れが出ないようにする。
 enum PaletteMetrics {
     static let width: CGFloat = 360
-    // 440（ヘッダ＋10行＋プレビュー＋フッタ）＋ 56（履歴の検索/種別バー）。
+    // 案B（余白・上質）: 1ページ7件（PaletteModel.pageSize）を、行間すき間つき2段組でゆったり並べる。
+    // ヘッダ36＋検索/種別78＋7行(50×7+すき間5×6=380)＋プレビュー54＋フッタ44＋区切り線 ≒ 600。
     // 検索バーは履歴ソースでのみ描画され、スニペット時はその分が下部スペースに回るだけで破綻しない。
-    static let baseHeight: CGFloat = 496
+    static let baseHeight: CGFloat = 600
     /// 権限バナー表示時に縦へ加える分（バナー＋区切り線の高さを上回る値。これで内容が固定高を超えて
     /// 中央寄せ・上下見切れになるのを防ぐ。未許可状態でだけ適用される一時的な増分）。
     static let bannerExtraHeight: CGFloat = 76
@@ -96,7 +97,7 @@ struct HistoryPaletteView: View {
     /// ヘッダ左のタイトル（ソース別）。
     private var headerTitle: String {
         switch model.source {
-        case .history: return "Tameo — History"
+        case .history: return "Tameo"
         case .snippetFolders: return "Tameo — Snippets"
         case .snippetItems(let folder): return folder.title.isEmpty ? "Snippets" : folder.title
         }
@@ -138,13 +139,21 @@ struct HistoryPaletteView: View {
     /// 検索バー。実フォーカスを持つ `NSSearchField` を first responder にして IME/日本語変換を効かせる。
     /// ナビ/確定系キーだけ HistoryPanelController のキーモニタが横取りし、文字・変換はフィールドが処理する。
     private var searchBar: some View {
-        VStack(spacing: 6) {
-            SearchFieldView(model: model)
-                .frame(height: 22)
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                SearchFieldView(model: model)
+                    .frame(height: 22)
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 8)
+            .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
             typeChips
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.vertical, 8)
     }
 
     private struct TypeChip: Identifiable {
@@ -181,11 +190,11 @@ struct HistoryPaletteView: View {
                             .lineLimit(1)
                             .fixedSize()
                     }
-                    .font(.caption2)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(selected ? Color.accentColor : Color.secondary.opacity(0.15), in: Capsule())
-                    .foregroundStyle(selected ? Color.white : Color.secondary)
+                    .font(.caption2.weight(selected ? .semibold : .regular))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(selected ? Color.accentColor.opacity(0.20) : Color.secondary.opacity(0.14), in: Capsule())
+                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
                 }
                 .buttonStyle(.plain)
             }
@@ -206,6 +215,15 @@ struct HistoryPaletteView: View {
             let field = NSSearchField()
             field.placeholderString = "Type to search…"
             field.focusRingType = .none
+            // 案B: 自前の淡色角丸コンテナに溶け込ませるため、フィールド自身の縁/背景は描かせない。
+            // さらに内蔵の虫眼鏡ボタンを消す（自前の magnifyingglass を左に置くため。残すと文字に重なる）。
+            field.isBezeled = false
+            field.isBordered = false
+            field.drawsBackground = false
+            if let cell = field.cell as? NSSearchFieldCell {
+                cell.isBezeled = false
+                cell.searchButtonCell = nil
+            }
             field.sendsWholeSearchString = false
             field.delegate = context.coordinator
             field.font = .systemFont(ofSize: NSFont.systemFontSize(for: .small))
@@ -242,34 +260,43 @@ struct HistoryPaletteView: View {
     // MARK: - Rows（固定高1ページ・スクロールなし）
 
     private var rows: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 5) {   // 案B: 行間にすき間を入れて選択ピルを「浮かせる」
             ForEach(Array(model.pageItems.enumerated()), id: \.element.id) { index, row in
                 rowView(index: index, row: row)
             }
         }
-        .padding(.horizontal, 4)
-        .padding(.top, 4)
+        .padding(.horizontal, 6)
+        .padding(.top, 6)
         // ソース／ページ切替を軽くクロスフェード。実発火はミューテーション側の withAnimation が駆動する。
         .id("\(model.source.key)-\(model.pageIndex)")
         .transition(.opacity)
     }
 
-    /// 行内容の固定高（全種別で揃え、10 行が固定ページ・440pt に必ず収まることを構造的に保証）。
-    private static let rowContentHeight: CGFloat = 20
+    /// 行内容の固定高（案B: 2段組＝本文＋種別·時刻。全種別で揃え、10 行が固定ページに収まることを保証）。
+    private static let rowContentHeight: CGFloat = 34
     /// 種別アイコンの固定枠（≤ rowContentHeight で行高を崩さない）。
-    private static let leadingSize: CGFloat = 18
+    private static let leadingSize: CGFloat = 22
+
+    /// 相対時刻の整形（"2分前" / "2 min ago" 等・システムロケール依存）。
+    private static let relativeTime: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f
+    }()
 
     private func rowView(index: Int, row: PaletteRow) -> some View {
         let isSelected = (model.clampedRow == index)
         let badge = index == 9 ? "0" : "\(index + 1)"   // 0 = 10行目
+        // 案B: 選択は「淡い青みのピル」。ベタ塗りをやめ、番号と本文の色で示す（アイコンも白ではなくアクセント）。
+        let leadTint: Color = isSelected ? Color.accentColor : Color.secondary
         return Button {
             model.rowInPage = index
             onSelect(row)
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Text(badge)
                     .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
+                    .foregroundStyle(leadTint)
                     .frame(width: 16, alignment: .trailing)
                 // 履歴テキストだけ先頭アイコンなし＝M2 と同一外観。それ以外は固定枠のアイコンを差し込む。
                 if showsLeading(row) {
@@ -277,24 +304,59 @@ struct HistoryPaletteView: View {
                         .frame(width: Self.leadingSize, height: Self.leadingSize)
                         .clipped()
                 }
-                Text(row.title)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .foregroundStyle(isSelected ? Color.white : Color.primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(row.title)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                    if let sub = secondaryText(for: row) {
+                        Text(sub)
+                            .font(.caption2)
+                            .lineLimit(1)
+                            .foregroundStyle(isSelected ? Color.accentColor.opacity(0.7) : Color.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 if case .history(let item) = row, item.isPinned {
                     Image(systemName: "pin.fill")
                         .font(.caption2)
-                        .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
+                        .foregroundStyle(leadTint)
                 }
             }
             .frame(height: Self.rowContentHeight)
             .contentShape(Rectangle())
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(isSelected ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(isSelected ? Color.accentColor.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: 11))
         }
         .buttonStyle(.plain)
+    }
+
+    /// 行 2 段目の副次テキスト（案B）。履歴＝「種別 · 相対時刻」、フォルダ＝スニペット数、スニペット＝なし。
+    private func secondaryText(for row: PaletteRow) -> String? {
+        switch row {
+        case .history(let item):
+            let when = Self.relativeTime.localizedString(for: item.lastUsedAt, relativeTo: Date())
+            return "\(kindLabel(item.kind)) · \(when)"
+        case .folder(let folder):
+            let n = folder.enabledSnippets.count
+            return "\(n) snippet\(n == 1 ? "" : "s")"
+        case .snippet:
+            return nil
+        }
+    }
+
+    /// 種別の短ラベル（2 段目・種別チップの語彙に合わせる）。
+    private func kindLabel(_ kind: ClipKind) -> String {
+        switch kind {
+        case .text: return "Text"
+        case .rtf, .rtfd: return "Rich Text"
+        case .pdf: return "PDF"
+        case .png, .tiff: return "Image"
+        case .filename: return "File"
+        case .url: return "Link"
+        case .color: return "Color"
+        }
     }
 
     /// 先頭アイコンを出すか（履歴テキストだけは出さない＝M2 と同一外観）。
@@ -309,10 +371,10 @@ struct HistoryPaletteView: View {
         switch row {
         case .folder:
             Image(systemName: "folder")
-                .foregroundStyle(isSelected ? Color.white : Color.secondary)
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
         case .snippet:
             Image(systemName: "text.quote")
-                .foregroundStyle(isSelected ? Color.white : Color.secondary)
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
         case .history(let item):
             historyLeading(for: item, isSelected: isSelected)
         }
@@ -327,7 +389,7 @@ struct HistoryPaletteView: View {
                 Image(nsImage: img).resizable().scaledToFit()
             } else {
                 Image(systemName: "doc")
-                    .foregroundStyle(isSelected ? Color.white : Color.secondary)
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
             }
         case .png, .tiff:
             if let data = item.thumbnailPNG, let img = cachedImage(for: item, data: data) {
@@ -335,23 +397,23 @@ struct HistoryPaletteView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 3))
             } else {
                 Image(systemName: "photo")
-                    .foregroundStyle(isSelected ? Color.white : Color.secondary)
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
             }
         case .pdf:
             Image(systemName: "doc.text.image")
-                .foregroundStyle(isSelected ? Color.white : Color.secondary)
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
         case .color:
             RoundedRectangle(cornerRadius: 3)
                 .fill(Color(nsColor: NSColor(hexString: item.colorHex) ?? .gray))
                 .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.secondary.opacity(0.4)))
         case .url:
             Image(systemName: "link")
-                .foregroundStyle(isSelected ? Color.white : Color.secondary)
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
         case .rtf, .rtfd:
             // 種別チップの Rich と同じ記号に揃える。以前は "textformat"(Aa) だったが、
             // チップ側では Aa が Text を意味するため「行の Aa ＝リッチ」と読みが衝突していた。
             Image(systemName: "doc.richtext")
-                .foregroundStyle(isSelected ? Color.white : Color.secondary)
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
         case .text:
             EmptyView()
         }
@@ -381,10 +443,10 @@ struct HistoryPaletteView: View {
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .frame(height: 52)
-        .background(Color.secondary.opacity(0.06))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(height: 54)
+        .background(Color.secondary.opacity(0.045))
     }
 
     /// 選択中の履歴項目が OCR テキストを持つか（⌥⏎ ヒント表示の判定）。

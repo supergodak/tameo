@@ -3,18 +3,20 @@ import SwiftUI
 import SwiftData
 import Observation
 
-/// 履歴パレットの一時的なUI状態（Decade Pager）。
-/// 一覧を 10 件＝1ページ（decade）に区切り、`pageIndex` と「ページ内の選択行 `rowInPage`(0..9)」で
+/// 履歴パレットの一時的なUI状態（ページャ）。
+/// 一覧を `pageSize` 件＝1ページに区切り、`pageIndex` と「ページ内の選択行 `rowInPage`」で
 /// 選択を表す。グローバル添字は確定時にだけ導出する（ページ境界の桁ズレを避けるための単一基準）。
 /// `rows` は `show()` 時のスナップショット（履歴は設定の最大件数）で、表示中は不変。
 @MainActor
 @Observable
 final class PaletteModel {
-    static let pageSize = 10
+    /// 1ページの表示件数（案B: 余白重視で 7 件。数字キー 1〜7 が有効、残りは次ページ）。
+    /// この定数だけでページャ・フッタのドット・番号バッジが追従する。
+    static let pageSize = 7
 
-    /// 現在のページ（decade）。0 始まり。
+    /// 現在のページ。0 始まり。
     var pageIndex: Int = 0
-    /// 現ページ内で選択中の行（0..9）。
+    /// 現ページ内で選択中の行（0..pageSize-1）。
     var rowInPage: Int = 0
     /// 全件スナップショット（`show()` 時に固める不変の元データ）。検索/フィルタはこれを絞り込む。
     var allRows: [PaletteRow] = []
