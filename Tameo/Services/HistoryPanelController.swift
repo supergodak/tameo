@@ -160,8 +160,8 @@ final class HistoryPanelController {
     private var resignObserver: Any?
     /// 表示中だけ有効な「パネル外クリック」監視トークン（key になれない時の閉じ保険）。
     private var outsideClickMonitor: Any?
-    /// ホットキー発火時点の前面アプリ（＝貼り付け対象）。
-    private var targetApp: NSRunningApplication?
+    /// ホットキー発火時点の貼り付け対象（AX で解決したフォーカス先＋送出方式）。
+    private var pasteTarget: PasteDestination?
 
     init(modelContainer: ModelContainer, store: HistoryStore, snippetStore: SnippetStore,
          paste: PasteService, settings: SettingsStore) {
@@ -183,9 +183,30 @@ final class HistoryPanelController {
         if let panel, panel.isVisible { hide() } else { show(source: .snippetFolders) }
     }
 
+    /// パレットを開く直前の貼り付け先を決める。
+    /// フォーカスは「活性化状態」ではなく AX の `kAXFocusedApplicationAttribute` で追う。
+    /// Spotlight / Alfred / Toppoi 型の非活性パネルは frontmost に現れず（自アプリや背後アプリが返る）、
+    /// AX でしか正しく特定できないため。AX 解決アプリが frontmost と食い違う＝非活性パネルとみなし、
+    /// 貼付時は activate せず対象 PID へ直送する。AX が使えない場合は従来の frontmost にフォールバック。
+    private static func resolvePasteTarget() -> PasteDestination? {
+        let ownPid = ProcessInfo.processInfo.processIdentifier
+        let front = NSWorkspace.shared.frontmostApplication
+
+        if let axApp = FocusResolver.focusedApplication(), axApp.processIdentifier != ownPid {
+            // AX が自分以外のフォーカスアプリを返したらそれを最優先で採用。
+            let nonActivating = axApp.processIdentifier != front?.processIdentifier
+            return PasteDestination(app: axApp, isNonActivating: nonActivating)
+        }
+        // フォールバック: 従来どおり frontmost（自分自身なら対象なし＝自パレットへの誤爆を防ぐ）。
+        if let front, front.processIdentifier != ownPid {
+            return PasteDestination(app: front, isNonActivating: false)
+        }
+        return nil
+    }
+
     func show(source: PaletteSource = .history) {
-        // 自分を前面化する前に、貼り付け対象を捕捉しておく。
-        targetApp = NSWorkspace.shared.frontmostApplication
+        // 自分を前面化する前に、貼り付け対象を捕捉しておく（activate 後だとフォーカスが Tameo に移る）。
+        pasteTarget = Self.resolvePasteTarget()
         // スナップショットと選択・権限状態を“キーモニタ装着前”に確定させる（遅延同期レースを排除）。
         switch source {
         case .history: loadHistory()
@@ -457,14 +478,14 @@ final class HistoryPanelController {
             // ⌥（平文）＋ OCRテキストあり → 画像/パスでなく認識テキストを貼る。
             // 画像ピクセル(png/tiff)・画像ファイルを指す filename の両方を対象にする。
             if asPlainText, !item.ocrText.isEmpty {
-                paste.pasteText(item.ocrText, to: targetApp)
+                paste.pasteText(item.ocrText, to: pasteTarget)
             } else {
-                paste.paste(item, asPlainText: asPlainText, to: targetApp)
+                paste.paste(item, asPlainText: asPlainText, to: pasteTarget)
             }
         case .snippet(let snippet):
             hide()
             // スニペット本文は元から平文。pasteText は gate を通すので履歴を汚染しない。
-            paste.pasteText(snippet.content, to: targetApp)
+            paste.pasteText(snippet.content, to: pasteTarget)
         }
     }
 

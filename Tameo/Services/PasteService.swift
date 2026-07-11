@@ -7,13 +7,22 @@ import Sauce
 /// - `copyToClipboard`: 書き込みのみ（プライバシー上クリーン）。
 /// - `paste`: ペーストボードへ書込 → 対象アプリを前面へ戻す → フォーカス復帰を確認して Cmd+V を合成送出。
 /// 書き込み・CGEvent送出は内容読みではないため macOS 15.4/26 のペーストボード・プライバシー警告は出ない。
+/// 貼り付け先アプリと、その貼り付け方式。
+/// - `isNonActivating`=false: 通常アプリ。前面へ activate してからセッションタップへ Cmd+V（従来方式）。
+/// - `isNonActivating`=true : Spotlight / Alfred / Toppoi 型の非活性パネル。activate すると引っ込む/
+///   フォーカスが外れるため、前面化せず対象プロセスへ `CGEvent.postToPid` で直送する。
+struct PasteDestination {
+    let app: NSRunningApplication
+    let isNonActivating: Bool
+}
+
 @MainActor
 protocol PasteServicing {
     func copyToPasteboard(_ item: ClipboardItem)
     func copyAsPlainText(_ item: ClipboardItem)
-    func paste(_ item: ClipboardItem, asPlainText: Bool, to target: NSRunningApplication?)
+    func paste(_ item: ClipboardItem, asPlainText: Bool, to target: PasteDestination?)
     /// スニペット等の生テキストを貼り付ける（履歴項目ではない経路）。
-    func pasteText(_ text: String, to target: NSRunningApplication?)
+    func pasteText(_ text: String, to target: PasteDestination?)
 }
 
 @MainActor
@@ -38,8 +47,8 @@ final class PasteService: PasteServicing {
         _ = writeToPasteboard(item, asPlainText: true)
     }
 
-    /// 選択項目を `target`（ホットキー発火時に捕捉した前面アプリ）へ貼り付ける。
-    func paste(_ item: ClipboardItem, asPlainText: Bool, to target: NSRunningApplication?) {
+    /// 選択項目を `target`（ホットキー発火時に AX で捕捉したフォーカス先）へ貼り付ける。
+    func paste(_ item: ClipboardItem, asPlainText: Bool, to target: PasteDestination?) {
         // 1) ペーストボードへ書込（種別別）。未コミットなら合成キーを送らない。
         guard writeToPasteboard(item, asPlainText: asPlainText) else {
             NSLog("Tameo: pasteboard write did not commit; abort paste")
@@ -53,7 +62,7 @@ final class PasteService: PasteServicing {
 
     /// スニペット等の生テキストを貼り付ける（履歴項目ではない経路）。
     /// 書き込み後に gate へ changeCount を記録するため、監視は自己コピーをスキップし履歴を汚染しない。
-    func pasteText(_ text: String, to target: NSRunningApplication?) {
+    func pasteText(_ text: String, to target: PasteDestination?) {
         // 空テキストは何もしない。clearContents でユーザーの現在のクリップボードを消さないため
         //（本文が空のスニペットを選んでもクリップボードを破壊しない）。
         guard !text.isEmpty else { return }
@@ -67,7 +76,7 @@ final class PasteService: PasteServicing {
     }
 
     /// ペーストボード書込済みの内容を `target` へ合成 Cmd+V で送る共通処理。
-    private func synthesizePasteCommand(to target: NSRunningApplication) {
+    private func synthesizePasteCommand(to target: PasteDestination) {
         // 「選択後に⌘Vを自動入力」が無効なら、内容はペーストボードへ載っているので手動貼付に委ねて終了。
         guard settings.inputPasteCommand else { return }
         // アクセシビリティ未許可なら合成キーは送れない。プロンプト後も未許可なら設定画面へ誘導。
@@ -78,12 +87,19 @@ final class PasteService: PasteServicing {
             }
             return
         }
-        // 合成 Cmd+V は前面アプリへ届くため、対象アプリを前面へ戻す。
-        target.activate()
         // レイアウト補正済みの V キーコードを Sauce から取得（手動QWERTYゲートは書かない）。
         let vKey = Sauce.shared.keyCode(for: .v)
+
+        if target.isNonActivating {
+            // Spotlight / Alfred / Toppoi 型パネル: activate すると引っ込む/フォーカスが外れるため、
+            // 前面化せず対象プロセスへ直接 Cmd+V を送る（セッションタップ＝最前面宛てでは届かない）。
+            Self.postCommandV(virtualKey: vKey, toPid: target.app.processIdentifier)
+            return
+        }
+        // 通常アプリ: 合成 Cmd+V は前面アプリへ届くため、対象を前面へ戻してから送出。
+        target.app.activate()
         // フォーカスが対象へ実際に戻ってから送出（固定遅延より堅牢。最大 ~0.24s でタイムアウト送出）。
-        Self.postCommandV(virtualKey: vKey, whenFrontmost: target, attemptsLeft: 8)
+        Self.postCommandV(virtualKey: vKey, whenFrontmost: target.app, attemptsLeft: 8)
     }
 
     /// 種別別にペーストボードへ書き込む。書き込み後の changeCount を gate へ記録（自己コピー抑止）。
@@ -179,18 +195,31 @@ final class PasteService: PasteServicing {
         }
     }
 
-    /// Cmd+V を合成してセッション・イベントタップへ送出。
+    /// Cmd+V を合成してセッション・イベントタップへ送出（＝最前面アプリ宛て。通常アプリ用）。
     private static func postCommandV(virtualKey: CGKeyCode) {
-        guard let source = CGEventSource(stateID: .combinedSessionState) else { return }
+        guard let (keyDown, keyUp) = makeCommandVEvents(virtualKey: virtualKey) else { return }
+        keyDown.post(tap: .cgSessionEventTap)
+        keyUp.post(tap: .cgSessionEventTap)
+    }
+
+    /// Cmd+V を合成して特定プロセスへ直送（非活性パネル用。前面化不要で届く）。
+    private static func postCommandV(virtualKey: CGKeyCode, toPid pid: pid_t) {
+        guard let (keyDown, keyUp) = makeCommandVEvents(virtualKey: virtualKey) else { return }
+        keyDown.postToPid(pid)
+        keyUp.postToPid(pid)
+    }
+
+    /// Cmd 修飾付きの V キーダウン/アップ CGEvent 対を生成する（送出先は呼び出し側が選ぶ）。
+    private static func makeCommandVEvents(virtualKey: CGKeyCode) -> (CGEvent, CGEvent)? {
+        guard let source = CGEventSource(stateID: .combinedSessionState) else { return nil }
         source.setLocalEventsFilterDuringSuppressionState(
             [.permitLocalMouseEvents, .permitSystemDefinedEvents],
             state: .eventSuppressionStateSuppressionInterval
         )
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true)
-        keyDown?.flags = .maskCommand
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: false)
-        keyUp?.flags = .maskCommand
-        keyDown?.post(tap: .cgSessionEventTap)
-        keyUp?.post(tap: .cgSessionEventTap)
+        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: false) else { return nil }
+        keyDown.flags = .maskCommand
+        keyUp.flags = .maskCommand
+        return (keyDown, keyUp)
     }
 }
