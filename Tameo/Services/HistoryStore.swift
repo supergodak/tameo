@@ -37,7 +37,9 @@ final class HistoryStore {
         // 種別も一致条件に含めるため、同じパス文字列でも「テキスト行」と「実ファイルの filename 行」は
         // 別物として扱い、ハッシュ衝突で filename 捕捉（アイコン/ファイル参照）を取りこぼさない。
         if let existing = existingItem(kindRaw: payload.kind.rawValue, contentHash: hash) {
-            existing.lastUsedAt = .now
+            // 検知時刻で繰り上げる。ただし遅れて着地した非同期取り込み（画像）が、既により新しい
+            // 使用時刻を持つ行を過去へ引き戻さないよう単調に保つ。
+            existing.lastUsedAt = max(existing.lastUsedAt, payload.capturedAt)
             save()
             return
         }
@@ -131,6 +133,53 @@ final class HistoryStore {
         save()
     }
 
+    /// 履歴を検索する。クエリと種別フィルタは **DB 側の述語**で適用し、結果の上位 `limit` 件を返す。
+    ///
+    /// 以前はパレット側が「最新 100 件を取得 → その配列をインメモリで絞る」実装だったため、
+    /// 保持上限（既定 200・最大 1000）のうち 101 件目以降は検索に一切現れなかった
+    /// （README の "Search everything" / "full-text history search" と食い違っていた）。
+    /// `limit` は「全履歴を検索した結果の上位 N 件」に掛かるので、パレットのページ数は保ったまま
+    /// 全件が検索対象になる。
+    ///
+    /// - Parameters:
+    ///   - query: 生のクエリ。ここで索引と同じ規則へ正規化する（全角/かな/大小の揺れを吸収）。
+    ///   - kinds: 空なら全種別。
+    func searchHistory(query: String, kinds: Set<ClipKind>, sortOrder: HistorySortOrder,
+                       limit: Int) -> [ClipboardItem] {
+        let sort: [SortDescriptor<ClipboardItem>]
+        switch sortOrder {
+        case .lastUsed: sort = [SortDescriptor(\.lastUsedAt, order: .reverse)]
+        case .createdAt: sort = [SortDescriptor(\.createdAt, order: .reverse)]
+        }
+        let q = SearchNormalizer.normalize(query)
+        let kindRaws = kinds.map(\.rawValue)
+
+        var d: FetchDescriptor<ClipboardItem>
+        switch (q.isEmpty, kindRaws.isEmpty) {
+        case (true, true):
+            d = FetchDescriptor<ClipboardItem>(sortBy: sort)
+        case (false, true):
+            d = FetchDescriptor<ClipboardItem>(
+                predicate: #Predicate { $0.searchIndex.contains(q) }, sortBy: sort)
+        case (true, false):
+            d = FetchDescriptor<ClipboardItem>(
+                predicate: #Predicate { kindRaws.contains($0.kindRaw) }, sortBy: sort)
+        case (false, false):
+            d = FetchDescriptor<ClipboardItem>(
+                predicate: #Predicate { kindRaws.contains($0.kindRaw) && $0.searchIndex.contains(q) },
+                sortBy: sort)
+        }
+        d.fetchLimit = limit
+        return (try? modelContext.fetch(d)) ?? []
+    }
+
+    /// 履歴から 1 項目だけ削除する（パレットの ⌘⌫）。
+    /// `clearAll` と同じ理由でオブジェクト単位に削除し、externalStorage の sidecar も片付ける。
+    func delete(_ item: ClipboardItem) {
+        modelContext.delete(item)
+        save()
+    }
+
     /// 全履歴を消去（メニューの「履歴をクリア」用）。
     /// 書き込み（insert/delete/save）は本クラスに一本化する設計のため、View直叩きではなくここを呼ぶ。
     func clearAll() {
@@ -147,17 +196,29 @@ final class HistoryStore {
 
     /// 既存（M5前）の全行に検索インデックスを一度だけ補完する。起動時に1回呼ぶ。
     /// 数百〜数千件規模なら同期パスで十分。`UserDefaults` のフラグで再実行を防ぐ。
+    ///
+    /// フラグは**実際に成功したときだけ**立てる。fetch や save が失敗したのに「補完済み」に
+    /// してしまうと二度と走らず、対象行は永久に検索へ現れなくなる（`searchIndex` が空の行は
+    /// どのクエリにもヒットしない）。一時的な DB エラーを恒久的な機能欠損に変えないため、
+    /// 失敗時はフラグを立てずに次回起動で再試行させる。
     func backfillSearchIndexIfNeeded() {
         let key = "tameo.searchIndex.backfilled"
         guard !UserDefaults.standard.bool(forKey: key) else { return }
         let d = FetchDescriptor<ClipboardItem>(
             predicate: #Predicate { $0.searchIndex.isEmpty }
         )
-        if let items = try? modelContext.fetch(d), !items.isEmpty {
+        guard let items = try? modelContext.fetch(d) else {
+            NSLog("Tameo: searchIndex backfill fetch failed; 次回起動で再試行します")
+            return
+        }
+        if !items.isEmpty {
             for item in items {
                 item.searchIndex = item.searchableSourceText
             }
-            save()
+            guard save() else {
+                NSLog("Tameo: searchIndex backfill save failed; 次回起動で再試行します")
+                return
+            }
         }
         UserDefaults.standard.set(true, forKey: key)
     }
@@ -165,39 +226,58 @@ final class HistoryStore {
     /// 既存履歴に溜まった重複行を一度だけ掃除する（bump-to-top 導入前に積まれた分の後始末）。起動時に1回呼ぶ。
     /// 同種別・同内容ハッシュのグループごとに最新1件だけ残し、古い重複は削除する（ピン留めは削除しない）。
     /// レガシ行は contentHash が空なので、グループ化の前に必ず補完する（空同士の誤マージを防ぐ）。
+    /// フラグは**実際に成功したときだけ**立てる（`backfillSearchIndexIfNeeded` と同じ理由）。
+    /// 以前は `defer` で立てていたため、fetch 失敗の早期 return でも「掃除済み」が確定し、
+    /// 一時的な DB エラーで掃除が永久に走らなくなっていた。
     func dedupeExistingHistoryIfNeeded() {
         let key = "tameo.history.deduped.v1"
         guard !UserDefaults.standard.bool(forKey: key) else { return }
-        defer { UserDefaults.standard.set(true, forKey: key) }
 
         // 新しい順に走査し、初めて見た (種別+ハッシュ) を残し、以降の同一キーは削除する。
         let d = FetchDescriptor<ClipboardItem>(sortBy: [SortDescriptor(\.lastUsedAt, order: .reverse)])
-        guard let items = try? modelContext.fetch(d) else { return }
+        guard let items = try? modelContext.fetch(d) else {
+            NSLog("Tameo: dedupe fetch failed; 次回起動で再試行します")
+            return
+        }
 
         var seen = Set<String>()
-        var removed = 0
+        var changed = false
         for item in items {
             if item.contentHash.isEmpty {
                 item.contentHash = ContentHash.sha256Hex(canonicalBytes(of: item))
+                changed = true                      // ハッシュ補完だけでも保存対象
             }
             let groupKey = item.kindRaw + "\u{0}" + item.contentHash
             if seen.contains(groupKey) {
                 // 既に同一内容のより新しい行を残している。古い重複を削除（ただしピンは温存）。
                 if item.isPinned { continue }
                 modelContext.delete(item)
-                removed += 1
+                changed = true
             } else {
                 seen.insert(groupKey)
             }
         }
-        if removed > 0 { save() }
+        if changed {
+            guard save() else {
+                NSLog("Tameo: dedupe save failed; 次回起動で再試行します")
+                return
+            }
+        }
+        UserDefaults.standard.set(true, forKey: key)
     }
 
-    /// 1項目の検索インデックスを必要なら補完する（一覧表示・検索の直前に使う遅延 backfill）。
-    func ensureSearchIndex(_ item: ClipboardItem) {
-        guard item.searchIndex.isEmpty else { return }
-        item.searchIndex = item.searchableSourceText
-        save()
+    /// 渡された一覧のうち検索インデックスが空の行を補完する（一覧表示の直前に使う遅延 backfill）。
+    ///
+    /// 起動時の `backfillSearchIndexIfNeeded` が本線だが、そちらが何らかの理由で取りこぼした行が
+    /// あっても、目に触れた時点でここが拾う。`searchIndex` が空の行はどのクエリにもヒットしないため、
+    /// 保険を二重にしておく（以前は 1 項目版が存在するだけで呼び出し元がなく、死んでいた）。
+    func ensureSearchIndexes(in items: [ClipboardItem]) {
+        var changed = false
+        for item in items where item.searchIndex.isEmpty {
+            item.searchIndex = item.searchableSourceText
+            changed = true
+        }
+        if changed { save() }
     }
 
     // MARK: - Private
@@ -234,12 +314,16 @@ final class HistoryStore {
         }
     }
 
-    private func save() {
+    /// 保存する。成功したかを返す（一度きりの移行処理は、成功を確認してからフラグを立てるため）。
+    @discardableResult
+    private func save() -> Bool {
         do {
             try modelContext.save()
+            return true
         } catch {
-            // M1: 保存失敗は致命ではないのでログのみ（将来は通知/リトライ）。
+            // 通常の取り込み経路では保存失敗は致命ではないのでログのみ（将来は通知/リトライ）。
             NSLog("Tameo: history save failed: %@", String(describing: error))
+            return false
         }
     }
 }

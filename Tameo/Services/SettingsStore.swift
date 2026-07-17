@@ -43,9 +43,6 @@ final class SettingsStore {
     var storeURL: Bool { didSet { defaults.set(storeURL, forKey: Keys.storeURL) } }
     var storeColor: Bool { didSet { defaults.set(storeColor, forKey: Keys.storeColor) } }
 
-    /// 機密マーク付き（パスワードマネージャ等の ConcealedType）を履歴に残さない（既定 true）。
-    var ignoreConcealed: Bool { didSet { defaults.set(ignoreConcealed, forKey: Keys.ignoreConcealed) } }
-
     /// コピーした画像をオンデバイス OCR して検索・テキスト貼付を可能にする（既定 true）。完全ローカル。
     var ocrEnabled: Bool { didSet { defaults.set(ocrEnabled, forKey: Keys.ocrEnabled) } }
 
@@ -77,7 +74,6 @@ final class SettingsStore {
         self.storeFilename = (defaults.object(forKey: Keys.storeFilename) as? Bool) ?? true
         self.storeURL = (defaults.object(forKey: Keys.storeURL) as? Bool) ?? true
         self.storeColor = (defaults.object(forKey: Keys.storeColor) as? Bool) ?? true
-        self.ignoreConcealed = (defaults.object(forKey: Keys.ignoreConcealed) as? Bool) ?? true
         self.ocrEnabled = (defaults.object(forKey: Keys.ocrEnabled) as? Bool) ?? true
         self.excludedBundleIDs = defaults.stringArray(forKey: Keys.excludedBundleIDs) ?? []
         // ログイン項目は OS の登録状態を初期値に（.requiresApproval も実質有効として扱う。UserDefaults とは独立）。
@@ -134,7 +130,6 @@ final class SettingsStore {
         static let storeFilename = "tameo.store.filename"
         static let storeURL = "tameo.store.url"
         static let storeColor = "tameo.store.color"
-        static let ignoreConcealed = "tameo.ignoreConcealed"
         static let ocrEnabled = "tameo.ocrEnabled"
         static let excludedBundleIDs = "tameo.excludedBundleIDs"
     }

@@ -18,12 +18,19 @@ final class PaletteModel {
     var pageIndex: Int = 0
     /// 現ページ内で選択中の行（0..pageSize-1）。
     var rowInPage: Int = 0
-    /// 全件スナップショット（`show()` 時に固める不変の元データ）。検索/フィルタはこれを絞り込む。
+    /// 現在の表示対象行。履歴ソースでは「DB へクエリを投げた結果」で、検索/フィルタ適用済み。
     var allRows: [PaletteRow] = []
+    /// クエリ・種別フィルタが変わったときに呼ぶ。コントローラが DB へ問い合わせ直して `allRows` を差し替える。
+    /// （インメモリ絞り込みだと、取得済みスナップショットの外にある行が永久に検索へ出てこないため）
+    @ObservationIgnored var onFilterChanged: (() -> Void)?
     /// 検索クエリ（履歴ソースでのみ有効）。
-    var query: String = ""
+    var query: String = "" {
+        didSet { if oldValue != query { onFilterChanged?() } }
+    }
     /// 種別フィルタ（空＝全種別）。
-    var typeFilter: Set<ClipKind> = []
+    var typeFilter: Set<ClipKind> = [] {
+        didSet { if oldValue != typeFilter { onFilterChanged?() } }
+    }
     /// `/` で入る検索モード（クエリ空でも数字をクエリに入れるためのフラグ）。
     var searchActive: Bool = false
     /// 検索フィールドへ first responder を移すよう要求するカウンタ（表示時・チップ操作後に増やす）。
@@ -36,29 +43,15 @@ final class PaletteModel {
     /// Clipy のフォルダは入れ子なしのため現状は深さ 1（非空＝フォルダの中身を表示中）。
     var snippetStack: [SnippetFolder] = []
 
-    /// 表示行（導出）。履歴ソースでは種別フィルタ→テキスト検索の順に絞り、ピン留めを最上段へ。
+    /// 表示行（導出）。種別フィルタ・テキスト検索は **DB 側の述語**で適用済みなので、
+    /// ここではピン留めを最上段へ寄せるだけ（安定分割。別セクションにせず単一リストでページャ計算を保つ）。
     /// 履歴以外（スニペット）は `allRows` をそのまま返す（v1では検索/フィルタ対象外）。
-    /// `pageItems`/番号貼付/ページャ/フッタはすべてこの `rows` から導出されるため、絞り込みに自動追従する。
+    /// `pageItems`/番号貼付/ページャ/フッタはすべてこの `rows` から導出される。
     var rows: [PaletteRow] {
         guard case .history = source else { return allRows }
-        var result = allRows
-        if !typeFilter.isEmpty {
-            result = result.filter {
-                if case .history(let item) = $0 { return typeFilter.contains(item.kind) }
-                return false
-            }
-        }
-        let q = SearchNormalizer.normalize(query)
-        if !q.isEmpty {
-            result = result.filter {
-                if case .history(let item) = $0 { return item.searchIndex.contains(q) }
-                return false
-            }
-        }
-        // ピン最上段（安定分割。別セクションにせず単一リストでページャ計算を保つ）。
         var pinned: [PaletteRow] = []
         var rest: [PaletteRow] = []
-        for row in result {
+        for row in allRows {
             if case .history(let item) = row, item.isPinned { pinned.append(row) } else { rest.append(row) }
         }
         return pinned + rest
@@ -170,6 +163,11 @@ final class HistoryPanelController {
         self.snippetStore = snippetStore
         self.paste = paste
         self.settings = settings
+        // 検索フィールド／種別チップの変更で DB を引き直す（絞り込みは DB 側の述語で行うため）。
+        model.onFilterChanged = { [weak self] in
+            self?.reloadHistoryRows()
+            self?.model.reset()   // 絞り込みが変われば先頭ページ・先頭行へ
+        }
     }
 
     /// 表示中なら閉じ、非表示なら履歴を開く（⌘⇧V 用）。
@@ -246,15 +244,22 @@ final class HistoryPanelController {
 
     // MARK: - Source loading（表示ソースの切替・スニペット階層）
 
-    /// 履歴ソースへ。設定のソート順・最大件数でスナップショット。
+    /// 履歴ソースへ。検索状態を初期化してから DB を引く。
     private func loadHistory() {
         model.source = .history
         model.snippetStack.removeAll()
-        let items = fetchTopItems()
-        model.allRows = items.map { PaletteRow.history($0) }
-        store.recognizeMissing(in: items)   // 既存画像の未OCR分を遅延認識（検索可能化）
         clearSearchState()
+        reloadHistoryRows()
         model.reset()
+    }
+
+    /// 現在のクエリ・フィルタで履歴行を引き直す（`model.query` / `typeFilter` の変更時にも呼ばれる）。
+    private func reloadHistoryRows() {
+        guard case .history = model.source else { return }
+        let items = fetchHistoryItems()
+        model.allRows = items.map { PaletteRow.history($0) }
+        store.ensureSearchIndexes(in: items)   // レガシ行の索引を遅延補完（起動時 backfill の取りこぼし保険）
+        store.recognizeMissing(in: items)      // 既存画像の未OCR分を遅延認識（検索可能化）
     }
 
     /// スニペットのフォルダ一覧（トップ）へ。有効なフォルダのみ、order 昇順。
@@ -276,10 +281,15 @@ final class HistoryPanelController {
     }
 
     /// 検索クエリ・種別フィルタ・検索モードを初期化する（ソース切替時に呼ぶ）。
+    /// 代入で `onFilterChanged` が発火して二重に DB を引かないよう、その間だけ通知を外す
+    /// （呼び出し側が直後に `reloadHistoryRows()` する契約）。
     private func clearSearchState() {
+        let saved = model.onFilterChanged
+        model.onFilterChanged = nil
         model.query = ""
         model.typeFilter = []
         model.searchActive = false
+        model.onFilterChanged = saved
     }
 
     /// ⇥：History ⇄ Snippets（ルート）を切り替える。
@@ -310,19 +320,16 @@ final class HistoryPanelController {
 
     // MARK: - Snapshot
 
-    /// 現在の履歴上位を設定のソート順・最大件数でスナップショットする。
-    /// 表示中はこの配列を凍結して使う（ページUIなので背は固定、画面外化しない）。
-    private func fetchTopItems() -> [ClipboardItem] {
-        let sort: [SortDescriptor<ClipboardItem>]
-        switch settings.sortOrder {
-        case .lastUsed: sort = [SortDescriptor(\.lastUsedAt, order: .reverse)]
-        case .createdAt: sort = [SortDescriptor(\.createdAt, order: .reverse)]
-        }
-        var d = FetchDescriptor<ClipboardItem>(sortBy: sort)
-        // 保持上限 maxHistory は最大 1000 まで可変だが、パレット表示は 10 ページ(100件)に抑える
-        // （⌘N の到達範囲・ドット rail を破綻させない。残りはストレージに保持され将来の検索で辿れる）。
-        d.fetchLimit = min(settings.maxHistory, Self.paletteItemCap)
-        return (try? modelContainer.mainContext.fetch(d)) ?? []
+    /// 現在のクエリ・種別フィルタ・ソート順で履歴を DB から取り出す。
+    /// 絞り込みは `HistoryStore.searchHistory` が DB 側の述語で行う（上限は「全件検索した結果の
+    /// 上位 N 件」に掛かるため、⌘N の到達範囲とドット rail を保ったまま全件が検索対象になる）。
+    private func fetchHistoryItems() -> [ClipboardItem] {
+        store.searchHistory(
+            query: model.query,
+            kinds: model.typeFilter,
+            sortOrder: settings.sortOrder,
+            limit: min(settings.maxHistory, Self.paletteItemCap)
+        )
     }
 
     // MARK: - Key handling
@@ -385,7 +392,8 @@ final class HistoryPanelController {
         switch event.keyCode {
         case 53: // esc：検索/フィルタがあれば先にクリア、次にスニペット階層を戻る、最後に閉じる
             if isHistory, model.searchActive || !model.query.isEmpty || !model.typeFilter.isEmpty {
-                animated { clearSearchState(); model.reset() }
+                // clearSearchState は通知を抑止するので、絞り込み解除後の全件を明示的に引き直す。
+                animated { clearSearchState(); reloadHistoryRows(); model.reset() }
             } else if !model.snippetStack.isEmpty {
                 animated { loadSnippetFolders() }
             } else {
@@ -409,6 +417,20 @@ final class HistoryPanelController {
            event.charactersIgnoringModifiers == "p",
            case .history(let item)? = model.selectedRow {
             animated { store.setPinned(item, !item.isPinned); model.reset() }
+            return true
+        }
+
+        // ⌘⌫：選択中の履歴項目を削除する。
+        // 素の ⌫ にしないのは、パレットが検索フィールドへフォーカスを置いているため
+        // 文字削除と見分けがつかず、打ち間違いで履歴を消してしまうから（⌘ 必須にして誤爆を防ぐ）。
+        if isHistory,
+           event.keyCode == 51,
+           event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command,
+           case .history(let item)? = model.selectedRow {
+            animated {
+                store.delete(item)
+                reloadHistoryRows()   // 削除後の一覧を引き直す（選択行は clampedRow が丸める）
+            }
             return true
         }
 

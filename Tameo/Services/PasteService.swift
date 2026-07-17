@@ -169,7 +169,7 @@ final class PasteService: PasteServicing {
         item.content
     }
 
-    /// 対象アプリが前面に戻るのを待ってから Cmd+V を送出する（タイムアウトで強制送出）。
+    /// 対象アプリが前面に戻るのを待ってから Cmd+V を送出する（タイムアウト時は対象 PID へ直送）。
     private static func postCommandV(virtualKey: CGKeyCode, whenFrontmost target: NSRunningApplication, attemptsLeft: Int) {
         let isFront = NSWorkspace.shared.frontmostApplication?.processIdentifier == target.processIdentifier
         if isFront {
@@ -179,7 +179,6 @@ final class PasteService: PasteServicing {
             // 前面確認後に短い settle を1回だけ入れてから送出する。
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 // settle 中にユーザーが別ウィンドウへ移った場合は誤爆になるため送出を中止する。
-                // （タイムアウト経路の強制送出は前面判定が効かないアプリ向けの意図的フォールバックとして温存）
                 guard NSWorkspace.shared.frontmostApplication?.processIdentifier
                         == target.processIdentifier else { return }
                 postCommandV(virtualKey: virtualKey)
@@ -187,7 +186,15 @@ final class PasteService: PasteServicing {
             return
         }
         if attemptsLeft <= 0 {
-            postCommandV(virtualKey: virtualKey)
+            // タイムアウト（~0.24s）: 対象が前面に戻らなかった。
+            // ここでセッションタップへ盲目送出すると、その瞬間に前面だった**別のアプリ**へ
+            // クリップボードの内容（パスワード等を含み得る）が貼られる。ユーザーが選んでいない
+            // 宛先へ機密を流すため、この経路は取らない。
+            // 一方で「前面判定が効かないアプリでも貼れる」というフォールバックの目的は維持したいので、
+            // 宛先を対象プロセスに限定した直送へ切り替える。対象が居なければ何も起きないだけで、
+            // 第三者アプリへ届くことは原理的にない。
+            guard !target.isTerminated else { return }
+            postCommandV(virtualKey: virtualKey, toPid: target.processIdentifier)
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {

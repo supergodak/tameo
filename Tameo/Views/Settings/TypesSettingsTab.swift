@@ -48,17 +48,12 @@ struct TypesSettingsTab: View {
             }
 
             Section {
-                Toggle("Skip password-manager items", isOn: $settings.ignoreConcealed)
+                Label("Password-manager items are never saved", systemImage: "lock.fill")
+                    .foregroundStyle(.secondary)
             } header: {
                 Text("Privacy")
             } footer: {
-                if settings.ignoreConcealed {
-                    Text("Items flagged as concealed (org.nspasteboard.ConcealedType) by password managers are never saved. Temporary and auto-generated items are always skipped regardless of this setting.")
-                } else {
-                    Label("Copied passwords and other concealed items will be saved to your local history.",
-                          systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                }
+                Text("Items flagged as concealed (org.nspasteboard.ConcealedType) by password managers are never saved to history, along with temporary and auto-generated items. This cannot be turned off.")
             }
         }
         .formStyle(.grouped)

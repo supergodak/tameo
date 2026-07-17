@@ -59,6 +59,119 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(list.first?.content, "A", "再コピーした A が最上段へ繰り上がる")
     }
 
+    /// 個別削除（パレットの ⌘⌫）。PRIVACY.md が「個別削除できる」と書いている根拠。
+    func test_delete_removesOnlyThatItem() {
+        let (store, context, _) = makeStore()
+        for t in ["A", "B", "C"] {
+            store.ingest(text: t, sourceBundleID: nil, isConcealed: false)
+        }
+        let target = items(context).first { $0.content == "B" }!
+        store.delete(target)
+        XCTAssertEqual(items(context).map(\.content), ["C", "A"], "B だけが消え、他は残る")
+    }
+
+    /// 遅れて着地した取り込みが、後からコピーした項目より上に並ばないこと。
+    ///
+    /// 画像は `Task.detached` でサムネ生成してから着地するため、挿入時刻で並べると
+    /// 「画像A→直後にテキストB」の順でコピーしても A が B より新しくなる（監査 #7）。
+    /// 並び順の基準を `capturedAt`（検知時刻）にしたので、着地順に関わらず順序が保たれる。
+    func test_lateArrivingPayload_sortsByCaptureTimeNotInsertTime() {
+        let (store, context, _) = makeStore()
+        let tA = Date.now                      // 画像Aをコピーした瞬間
+        let tB = tA.addingTimeInterval(0.1)    // その直後にテキストBをコピー
+
+        // B（後にコピー）が先に着地し、A（先にコピー・detached で遅延）が後から着地する。
+        store.ingest(CapturedPayload.text("B", source: nil, capturedAt: tB))
+        store.ingest(CapturedPayload.text("A", source: nil, capturedAt: tA))
+
+        XCTAssertEqual(items(context).map(\.content), ["B", "A"],
+                       "着地順ではなくコピー順で並ぶ（後からコピーした B が上）")
+        // 捨てずに両方残すこと（世代番号で古い方を落とすと、これがデータ損失に化ける）。
+        XCTAssertEqual(items(context).count, 2, "遅れて着地した項目も失われない")
+    }
+
+    /// 遅れて着地した重複が、既存行の使用時刻を過去へ引き戻さないこと（bump は単調）。
+    func test_lateArrivingDuplicate_doesNotMoveExistingItemBackward() {
+        let (store, context, _) = makeStore()
+        let old = Date.now.addingTimeInterval(-60)
+        store.ingest(CapturedPayload.text("A", source: nil, capturedAt: .now))
+        store.ingest(CapturedPayload.text("B", source: nil, capturedAt: .now.addingTimeInterval(1)))
+        // 1分前に捕捉された A が今ごろ着地しても、A は B より下がらない。
+        store.ingest(CapturedPayload.text("A", source: nil, capturedAt: old))
+        XCTAssertEqual(items(context).count, 2, "重複行は増えない")
+        let a = items(context).first { $0.content == "A" }!
+        XCTAssertGreaterThan(a.lastUsedAt, old, "古い捕捉時刻で過去へ引き戻されない")
+    }
+
+    // MARK: - 検索（監査 #8）
+
+    /// パレットの表示件数（100）より深い位置にある項目も検索で見つかること。
+    ///
+    /// 以前は「最新 100 件を取得 → その配列をインメモリで絞る」実装だったため、
+    /// 保持上限 200 のうち 101 件目以降は検索に一切現れなかった。
+    func test_searchHistory_findsItemsBeyondPaletteWindow() {
+        let (store, _, _) = makeStore(maxHistory: 200)
+        // 最初に目的の針を入れ、そのあと 150 件積んで深く沈める。
+        store.ingest(text: "needle-deep", sourceBundleID: nil, isConcealed: false)
+        for i in 0..<150 {
+            store.ingest(text: "filler-\(i)", sourceBundleID: nil, isConcealed: false)
+        }
+        // パレットが一度に持つのは 100 件。針はその窓の外（151番目）にいる。
+        let found = store.searchHistory(query: "needle-deep", kinds: [], sortOrder: .lastUsed, limit: 100)
+        XCTAssertEqual(found.count, 1, "表示窓(100件)の外にある項目も検索で見つかる")
+        XCTAssertEqual(found.first?.content, "needle-deep")
+    }
+
+    /// 種別フィルタが DB 側の述語として実際に動くこと（`#Predicate` の配列 contains は
+    /// SwiftData が実行時に弾くことがあるため、必ず実ストアで確かめる）。
+    func test_searchHistory_filtersByKind() {
+        let (store, _, _) = makeStore()
+        store.ingest(CapturedPayload.text("plain text", source: nil))
+        store.ingest(CapturedPayload.color(code: "#2D7DD2", hex: "#2D7DD2", source: nil))
+
+        let onlyColor = store.searchHistory(query: "", kinds: [.color], sortOrder: .lastUsed, limit: 100)
+        XCTAssertEqual(onlyColor.map(\.content), ["#2D7DD2"], "色だけに絞れる")
+
+        let onlyText = store.searchHistory(query: "", kinds: [.text], sortOrder: .lastUsed, limit: 100)
+        XCTAssertEqual(onlyText.map(\.content), ["plain text"], "テキストだけに絞れる")
+
+        let both = store.searchHistory(query: "", kinds: [.text, .color], sortOrder: .lastUsed, limit: 100)
+        XCTAssertEqual(both.count, 2, "複数種別を渡せる")
+    }
+
+    /// クエリ＋種別フィルタの併用（`#Predicate` の複合条件が SwiftData で通ること）。
+    func test_searchHistory_combinesQueryAndKind() {
+        let (store, _, _) = makeStore()
+        store.ingest(CapturedPayload.text("alpha", source: nil))
+        store.ingest(CapturedPayload.text("beta", source: nil))
+        store.ingest(CapturedPayload.color(code: "#alpha0", hex: "#AA0000", source: nil))
+
+        let hits = store.searchHistory(query: "alpha", kinds: [.text], sortOrder: .lastUsed, limit: 100)
+        XCTAssertEqual(hits.map(\.content), ["alpha"], "クエリと種別の両方が効く")
+    }
+
+    /// 検索が索引と同じ正規化を通ること（全角/かな/大小の揺れを吸収）。
+    func test_searchHistory_normalizesQuery() {
+        let (store, _, _) = makeStore()
+        store.ingest(text: "ドコモ Ａｐｐｌｅ", sourceBundleID: nil, isConcealed: false)
+        XCTAssertEqual(store.searchHistory(query: "どこも", kinds: [], sortOrder: .lastUsed, limit: 100).count, 1,
+                       "カタカナ↔ひらがなが一致する")
+        XCTAssertEqual(store.searchHistory(query: "apple", kinds: [], sortOrder: .lastUsed, limit: 100).count, 1,
+                       "全角→半角・大小が一致する")
+    }
+
+    /// 空クエリ・空フィルタは全件（上限まで）を新しい順で返すこと。
+    func test_searchHistory_emptyQueryReturnsAllWithinLimit() {
+        let (store, _, _) = makeStore()
+        for t in ["A", "B", "C"] {
+            store.ingest(text: t, sourceBundleID: nil, isConcealed: false)
+        }
+        let all = store.searchHistory(query: "", kinds: [], sortOrder: .lastUsed, limit: 100)
+        XCTAssertEqual(all.map(\.content), ["C", "B", "A"], "新しい順で全件返る")
+        let capped = store.searchHistory(query: "", kinds: [], sortOrder: .lastUsed, limit: 2)
+        XCTAssertEqual(capped.count, 2, "limit が効く")
+    }
+
     func test_prune_keepsMaxHistoryAndProtectsPinned() {
         let (store, context, _) = makeStore(maxHistory: 3)
         for t in ["1", "2", "3", "4", "5"] {

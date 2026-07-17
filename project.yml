@@ -81,13 +81,19 @@ schemes:
         - TameoTests
         - TameoUITests
 
+# 依存は全て exactVersion で固定する。
+# XcodeGen が .xcodeproj を毎回生成する構成のため、lockfile（Package.resolved）は
+# .xcodeproj 配下に生まれてリポジトリに残らない。つまり `from:`（範囲指定）にすると
+# 同じコミットからビルドしても時期によって別バージョンが入り、再現性が無くなるうえ、
+# 上流が乗っ取られた場合に署名済みリリースへ自動で流れ込む。更新は意図的に手で上げる。
+# （実際 Sauce は from: "2.4.0" のまま 2.5.0 へドリフトしていた）
 packages:
   Sauce:
     url: https://github.com/Clipy/Sauce
-    from: "2.4.0"
+    exactVersion: "2.5.0"          # キーレイアウト補正（QWERTY/Dvorak/JIS で V のキーコードが動く問題）
   KeyboardShortcuts:
     url: https://github.com/sindresorhus/KeyboardShortcuts
     exactVersion: "3.0.1"          # 3.0.0 はリリースビルドでクラッシュするため厳密固定
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
-    from: "2.9.3"                  # 直接配布アプリの自動更新（EdDSA署名＋appcast）
+    exactVersion: "2.9.3"          # 直接配布アプリの自動更新（EdDSA署名＋appcast）

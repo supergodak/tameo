@@ -10,10 +10,23 @@ final class SettingsUITests: XCTestCase {
 
     override func setUp() {
         continueAfterFailure = false
+        // 既に動いている Tameo（例: /Applications にインストールした常用インスタンス）を先に落とす。
+        //
+        // XCUIApplication はバンドルIDで対象を掴むため、同じIDのインスタンスが動いていると
+        // そちらへ取り付いてしまうことがある。常用インスタンスは `--uitest-open-settings` 無しで
+        // 起動しており設定ウィンドウを持たないので、AX ツリーにメニューバーしか現れず、
+        // タブや トグルの検索が不定期に失敗する（実測で約50%のフレークの原因はこれだった）。
+        // tearDown も terminate しているので、テストが常用インスタンスを終了させるのは既定の挙動。
+        // 既に動いている Tameo（例: /Applications の常用インスタンス、前テストの残り）を先に落とす。
+        // XCUIApplication はバンドルIDで対象を掴むため、`--uitest-open-settings` 無しで起動している
+        // 常用インスタンスが居ると、設定ウィンドウを持たないそちらへ取り付いて検索が失敗しうる。
+        let existing = XCUIApplication()
+        if existing.state != .notRunning { existing.terminate() }
     }
 
     override func tearDown() {
         // 次テストへ状態が漏れない/前インスタンスが残らないよう、毎回確実に終了する（フレーク対策）。
+        // 消えきるまで待つ（待たないと次テストの setUp/launch と競合する）。
         app?.terminate()
         app = nil
         super.tearDown()

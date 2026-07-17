@@ -21,11 +21,28 @@ final class ClipboardMonitor {
     var pollInterval: TimeInterval = 0.4
 
     /// 画像原本を保持する上限。超過時は原本を破棄しサムネ＋メタのみ残す（payloadTruncated=true）。
+    ///
+    /// 注: `NSPasteboardItem` にはサイズを事前に問い合わせる API が無く、`data(forType:)` は
+    /// 常に全バイトをプロセスへコピーする。したがってこの上限は「読む前の門」にはできず、
+    /// 読んだ後の**永続化と重いパースの門**として機能する（超過時は原本を捨て、RTF 平文化や
+    /// PDF 解析もスキップする）。デコード爆弾に効くのはバイト数ではなくピクセル数の上限で、
+    /// そちらは `OCRService.maxPixelSize` と `thumbnailMaxPixel` が担当する。
     static let maxOriginalBytes = 8 * 1024 * 1024
+    /// 履歴に残すテキストの上限バイト数（UTF-8）。
+    /// これを超える文字列は履歴に入れない。行として保持すると DB を肥大させるうえ、
+    /// 検索インデックスの正規化（NFKC＋かな畳み込み）が main を長時間塞ぐため。
+    /// クリップボード自体は無傷なので、ユーザーは通常どおり手で貼り付けられる。
+    static let maxTextBytes = 8 * 1024 * 1024
     /// 一覧サムネの最長辺ピクセル。
     static let thumbnailMaxPixel = 128
-    /// 画像の非同期取り込みで、古い結果が新しい結果の後に着地しないための単調ガード。
-    private var latestAppliedImageChange = 0
+    /// 直近 1 tick の間に前面だったアプリの bundle id（除外判定の取りこぼし防止）。
+    ///
+    /// コピーの発生時刻は知りようがなく、検知は最大 `pollInterval`＋tolerance（~0.48s）遅れる。
+    /// その間にユーザーがアプリを切り替えると「検知時点の前面」はコピー元ではない。
+    /// 期間中に前面だったアプリを全部覚えておき、1 つでも除外対象なら安全側に倒して取り込まない。
+    private var frontmostSinceLastTick: Set<String> = []
+    /// 前面アプリ切替の監視トークン（`start()` 中だけ有効）。
+    private var activationObserver: NSObjectProtocol?
 
     init(store: HistoryStore, gate: PasteboardWriteGate, settings: SettingsStore) {
         self.store = store
@@ -37,6 +54,20 @@ final class ClipboardMonitor {
 
     func start() {
         stop()
+        // 除外判定の窓を今の前面アプリで初期化する。
+        if let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier {
+            frontmostSinceLastTick.insert(front)
+        }
+        // 前面アプリの切替を拾い、tick 間に経由したアプリを取りこぼさない（bundle id のみ・内容は読まない）。
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                      let id = app.bundleIdentifier else { return }
+                self?.frontmostSinceLastTick.insert(id)
+            }
+        }
         let t = Timer(timeInterval: pollInterval, repeats: true) { [weak self] _ in
             // タイマーはメインランループで発火するため、メイン分離を明示して呼ぶ。
             MainActor.assumeIsolated {
@@ -52,13 +83,29 @@ final class ClipboardMonitor {
     func stop() {
         timer?.invalidate()
         timer = nil
+        if let activationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
+            self.activationObserver = nil
+        }
+        frontmostSinceLastTick.removeAll()
     }
 
     private func tick() {
+        // 除外判定の窓は 1 tick ぶんだけ保持する。今回ぶんを取り出し、次回用に現在の前面で撒き直す。
+        let recentFrontmost = frontmostSinceLastTick
+        defer {
+            frontmostSinceLastTick.removeAll()
+            if let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier {
+                frontmostSinceLastTick.insert(front)
+            }
+        }
+
         // changeCount の読み取りは内容を晒さず、プライバシー警告も出さない。
         let change = pasteboard.changeCount
         guard change != lastChangeCount else { return }
         lastChangeCount = change
+        // コピー時刻の最良近似。以降の並び順はこの時刻を基準にする（挿入時刻ではなく）。
+        let capturedAt = Date.now
 
         // 自分（Tameo の貼り戻し/コピー）が起こした変化は取り込まない＝重複行を防ぐ。
         if gate.isSelfWrite(changeCount: change) { return }
@@ -69,21 +116,15 @@ final class ClipboardMonitor {
         // データ読み取りの **前** に弾く（プライバシー据え置き）。
         for item in items {
             let types = Set(item.types)
-            // 一時/自動生成は常に無視。機密(ConcealedType)は設定 ignoreConcealed が有効なときだけ無視。
+            // 機密(ConcealedType)/一時/自動生成は設定に関わらず常に無視する（無効化手段は持たせない）。
             if !alwaysIgnoredMarkerTypes.isDisjoint(with: types) {
-                return
-            }
-            if settings.ignoreConcealed && types.contains(.concealed) {
                 return
             }
         }
 
-        // 助言用のコピー元（concealed 判定には使わない／ペーストボードは読まない）。
-        let source = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-
-        // 除外アプリが前面のときは取り込まない（内容を読む前に弾く）。bundle id の比較のみで中身は読まない。
-        // source=nil（前面不明/bundle id 無し）は突き合わせ不能のため取り込む（従来どおり）。機密遮断は上の ConcealedType ゲートが担当。
-        if let source, settings.excludedBundleIDs.contains(source) { return }
+        // コピー元の判定。内容を読む前に確定させる（bundle id の比較のみで中身は読まない）。
+        let origin = resolveOrigin(items: items, recentFrontmost: recentFrontmost)
+        guard !origin.isExcluded(by: settings.excludedBundleIDs) else { return }
 
         // ==== Tameo の背景経路で内容を読む唯一の箇所 ====
         // まず型集合（中身を読まない）で種別を判定し、勝った型だけを 1 回読む。
@@ -98,41 +139,86 @@ final class ClipboardMonitor {
         switch kind {
         case .png, .tiff:
             // 画像はサムネ生成・寸法読取を off-main で行うため非同期経路。
-            captureImage(items: items, kind: kind, source: source, changeCount: change)
+            captureImage(items: items, kind: kind, source: origin.bundleID, capturedAt: capturedAt)
         default:
-            if let payload = classify(kind: kind, items: items, source: source) {
+            if let payload = classify(kind: kind, items: items, source: origin.bundleID, capturedAt: capturedAt) {
                 store.ingest(payload)
             }
         }
         // ===============================================
     }
 
+    /// コピー元の判定結果。履歴に残す出所と、除外判定にかける候補集合を持つ。
+    private struct CopyOrigin {
+        /// 履歴へ記録する出所（最有力の 1 つ）。不明なら nil。
+        let bundleID: String?
+        /// 除外判定の対象となる候補すべて。
+        let candidates: Set<String>
+
+        func isExcluded(by excluded: [String]) -> Bool {
+            guard !excluded.isEmpty else { return false }
+            return !candidates.isDisjoint(with: Set(excluded))
+        }
+    }
+
+    /// コピー元を決める。
+    ///
+    /// 優先: `org.nspasteboard.source`。コピーした側がペーストボードへ明示的に載せた出所なので、
+    ///       アプリ切替のタイミングに一切左右されない（＝競合しない）。これがあればこれだけで判定する。
+    ///       読むのは bundle id の文字列マーカーのみで、ユーザーの内容ではない。
+    /// 代替: 前面アプリ。ただし検知は最大 ~0.48s 遅れるため、単一時点の前面は取り違える
+    ///       （除外アプリでコピー → 即 Safari へ切替 → Safari 由来と誤判定して保存、など）。
+    ///       そこで除外判定には「直近 1 tick に前面だったアプリ」を全部かけ、1 つでも該当したら
+    ///       取り込まない＝安全側へ倒す。誤って弾く側（通常アプリのコピーが捨てられる）は
+    ///       利便性の損失で済むが、誤って保存する側は機密の漏出になるため対称に扱わない。
+    private func resolveOrigin(items: [NSPasteboardItem], recentFrontmost: Set<String>) -> CopyOrigin {
+        for item in items {
+            if let declared = item.string(forType: .source), !declared.isEmpty {
+                return CopyOrigin(bundleID: declared, candidates: [declared])
+            }
+        }
+        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        var candidates = recentFrontmost
+        if let front { candidates.insert(front) }
+        return CopyOrigin(bundleID: front, candidates: candidates)
+    }
+
     /// 同期取り込み。種別ごとに対応経路を 1 回読む。各 capture が失敗したらテキスト表現へフォールバック。
-    private func classify(kind: ClipKind, items: [NSPasteboardItem], source: String?) -> CapturedPayload? {
+    private func classify(kind: ClipKind, items: [NSPasteboardItem], source: String?, capturedAt: Date) -> CapturedPayload? {
         switch kind {
         case .filename:
-            return captureFilenames(items: items, source: source) ?? textFallback(items: items, source: source)
+            return captureFilenames(items: items, source: source, capturedAt: capturedAt)
+                ?? textFallback(items: items, source: source, capturedAt: capturedAt)
         case .url:
-            return captureURL(items: items, source: source) ?? textFallback(items: items, source: source)
+            return captureURL(items: items, source: source, capturedAt: capturedAt)
+                ?? textFallback(items: items, source: source, capturedAt: capturedAt)
         case .color:
-            return captureColor(source: source) ?? textFallback(items: items, source: source)
+            return captureColor(source: source, capturedAt: capturedAt)
+                ?? textFallback(items: items, source: source, capturedAt: capturedAt)
         case .rtf, .rtfd, .pdf:
-            return captureRichData(kind: kind, items: items, source: source) ?? textFallback(items: items, source: source)
+            return captureRichData(kind: kind, items: items, source: source, capturedAt: capturedAt)
+                ?? textFallback(items: items, source: source, capturedAt: capturedAt)
         default:
-            return textFallback(items: items, source: source)
+            return textFallback(items: items, source: source, capturedAt: capturedAt)
         }
     }
 
     /// テキスト表現があればそれを取り込む（各種別捕捉のフォールバック）。
     /// 内容が色コード（#RGB/#RRGGBB/rgb(...)）なら `.color` へ昇格させる（チップ表示＋色対応アプリへの貼付）。
     /// `.color` の貼付は content 文字列も併載するため、テキストエディタ等には元の文字列がそのまま貼られる。
-    private func textFallback(items: [NSPasteboardItem], source: String?) -> CapturedPayload? {
+    private func textFallback(items: [NSPasteboardItem], source: String?, capturedAt: Date) -> CapturedPayload? {
         for item in items {
             if let text = item.string(forType: .string), !text.isEmpty {
-                if let hex = ColorCode.normalizedHex(from: text) {
-                    return .color(code: text, hex: hex, source: source)
+                // 巨大テキストは履歴に入れない（DB 肥大と検索インデックス正規化による main 停止を防ぐ）。
+                // 他アプリは同意なくペーストボードへ任意サイズの文字列を置けるため、上限は必須。
+                guard text.utf8.count <= Self.maxTextBytes else {
+                    NSLog("Tameo: skipped oversized text clip (%d bytes > %d)", text.utf8.count, Self.maxTextBytes)
+                    return nil
                 }
-                return .text(text, source: source)
+                if let hex = ColorCode.normalizedHex(from: text) {
+                    return .color(code: text, hex: hex, source: source, capturedAt: capturedAt)
+                }
+                return .text(text, source: source, capturedAt: capturedAt)
             }
         }
         return nil
@@ -140,7 +226,7 @@ final class ClipboardMonitor {
 
     /// file URL を読み、パス文字列＋先頭ファイルのアイコンから filename ペイロードを作る。
     /// `readObjects` の投機的多重実行はせず、項目ごとの `string(forType:.fileURL)` で 1 経路に留める。
-    private func captureFilenames(items: [NSPasteboardItem], source: String?) -> CapturedPayload? {
+    private func captureFilenames(items: [NSPasteboardItem], source: String?, capturedAt: Date) -> CapturedPayload? {
         var paths: [String] = []
         var urlStrings: [String] = []
         for item in items {
@@ -165,17 +251,19 @@ final class ClipboardMonitor {
             thumbnailPNG: thumb,
             fileURLStrings: urlList,
             sourceBundleID: source,
-            byteSize: displayPaths.utf8.count
+            byteSize: displayPaths.utf8.count,
+            capturedAt: capturedAt
         )
     }
 
     /// 非ファイル URL（.URL 型）。content=URL 文字列。
-    private func captureURL(items: [NSPasteboardItem], source: String?) -> CapturedPayload? {
+    private func captureURL(items: [NSPasteboardItem], source: String?, capturedAt: Date) -> CapturedPayload? {
         for item in items {
             if let s = item.string(forType: .URL), !s.isEmpty {
                 return CapturedPayload(
                     kind: .url, content: s, payloadUTI: ClipKind.url.preferredUTI,
-                    canonicalBytes: Data(s.utf8), sourceBundleID: source, byteSize: s.utf8.count
+                    canonicalBytes: Data(s.utf8), sourceBundleID: source, byteSize: s.utf8.count,
+                    capturedAt: capturedAt
                 )
             }
         }
@@ -183,19 +271,20 @@ final class ClipboardMonitor {
     }
 
     /// 色（NSColor 型）。content=#RRGGBB。勝った型（color）のみを 1 回読む。
-    private func captureColor(source: String?) -> CapturedPayload? {
+    private func captureColor(source: String?, capturedAt: Date) -> CapturedPayload? {
         guard let colors = pasteboard.readObjects(forClasses: [NSColor.self], options: nil) as? [NSColor],
               let color = colors.first else { return nil }
         let hex = color.tameoHexString
         return CapturedPayload(
             kind: .color, content: hex, payloadUTI: ClipKind.color.preferredUTI,
-            canonicalBytes: Data(hex.utf8), colorHex: hex, sourceBundleID: source, byteSize: hex.utf8.count
+            canonicalBytes: Data(hex.utf8), colorHex: hex, sourceBundleID: source, byteSize: hex.utf8.count,
+            capturedAt: capturedAt
         )
     }
 
     /// リッチデータ（rtf/rtfd/pdf）。原本を payloadData(externalStorage) に格納し、
     /// content は表示・検索・平文貼付用ラベル（rtf/rtfd=平文化／pdf=ページ数）。8MB 上限で原本破棄。
-    private func captureRichData(kind: ClipKind, items: [NSPasteboardItem], source: String?) -> CapturedPayload? {
+    private func captureRichData(kind: ClipKind, items: [NSPasteboardItem], source: String?, capturedAt: Date) -> CapturedPayload? {
         let pbType: NSPasteboard.PasteboardType
         switch kind {
         case .rtf: pbType = .rtf
@@ -221,7 +310,7 @@ final class ClipboardMonitor {
         return CapturedPayload(
             kind: kind, content: label, payloadUTI: kind.preferredUTI,
             canonicalBytes: canonical, payloadData: payloadData, payloadTruncated: truncated,
-            sourceBundleID: source, byteSize: data.count
+            sourceBundleID: source, byteSize: data.count, capturedAt: capturedAt
         )
     }
 
@@ -256,9 +345,13 @@ final class ClipboardMonitor {
     }
 
     /// 画像（png/tiff）を捕捉。raw を main で取得し、サムネ生成＋ピクセル寸法は `Task.detached` で行い、
-    /// changeCount 単調ガード付きで MainActor へ戻して取り込む。NSImage/CGImage はこの境界を越えない
-    /// （CapturedPayload は値型のみ）。貼り戻し由来の自己コピーは tick の gate 判定で既に弾かれている。
-    private func captureImage(items: [NSPasteboardItem], kind: ClipKind, source: String?, changeCount: Int) {
+    /// MainActor へ戻して取り込む。NSImage/CGImage はこの境界を越えない（CapturedPayload は値型のみ）。
+    /// 貼り戻し由来の自己コピーは tick の gate 判定で既に弾かれている。
+    ///
+    /// 着地が遅れても順序は `capturedAt`（検知時刻）が担保するため、以前あった changeCount の
+    /// 単調ガードは持たない。あのガードは「遅れて着地した画像を捨てる」もので、順序の不整合を
+    /// データ損失に置き換えてしまう（画像Aをコピーした直後にテキストBをコピーすると A が消える）。
+    private func captureImage(items: [NSPasteboardItem], kind: ClipKind, source: String?, capturedAt: Date) {
         let pbType: NSPasteboard.PasteboardType = (kind == .png) ? .png : .tiff
         var raw: Data?
         for item in items {
@@ -296,16 +389,15 @@ final class ClipboardMonitor {
                 pixelHeight: h,
                 payloadTruncated: truncated,
                 sourceBundleID: source,
-                byteSize: raw.count
+                byteSize: raw.count,
+                capturedAt: capturedAt
             )
-            await self.ingestImageIfCurrent(payload, changeCount: changeCount)
+            await self.ingest(payload)
         }
     }
 
-    /// 単調ガード: より新しい変化を既に取り込んでいたら、この（古い）非同期結果は捨てる。
-    private func ingestImageIfCurrent(_ payload: CapturedPayload, changeCount: Int) {
-        guard changeCount >= latestAppliedImageChange else { return }
-        latestAppliedImageChange = changeCount
+    /// detached から MainActor へ戻して取り込む。
+    private func ingest(_ payload: CapturedPayload) {
         store.ingest(payload)
     }
 

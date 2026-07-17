@@ -89,8 +89,10 @@ final class ClipboardItem {
     /// 非テキスト種別を含む取り込み用。`CapturedPayload`（Sendable）から生成する designated init。
     init(payload: CapturedPayload, contentHash: String) {
         self.content = payload.content
-        self.createdAt = .now
-        self.lastUsedAt = .now
+        // 挿入時刻ではなく「コピーを検知した時刻」で並べる。画像は detached のサムネ生成を挟んで
+        // 遅れて着地するため、.now だと直後にコピーしたテキストより新しい行になってしまう。
+        self.createdAt = payload.capturedAt
+        self.lastUsedAt = payload.capturedAt
         self.kindRaw = payload.kind.rawValue
         self.sourceBundleID = payload.sourceBundleID
         self.isConcealed = payload.isConcealed

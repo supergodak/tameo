@@ -37,9 +37,7 @@ struct TameoApp: App {
             StoreLocation.migrateLegacyDefaultStoreIfNeeded(to: storeURL)
             // 履歴に加えスニペット2モデルを同一ストアへ。既定値付きフィールドのみのため
             // 既存 ClipboardItem データはエンティティ追加だけで無傷（lightweight migration）。
-            let container = try ModelContainer(
-                for: ClipboardItem.self, SnippetFolder.self, Snippet.self,
-                configurations: ModelConfiguration(url: storeURL))
+            let container = try Self.makeContainer(at: storeURL)
             // スカラ設定の真実源（履歴数・ソート順・⌘V自動入力・ログイン時起動）。消費側へ注入する。
             // テスト実行時（ユニット/UI）は設定の永続化先を「使い捨ての隔離ドメイン」にする（重要）。
             // 実アプリの UserDefaults(.standard) を使うと、UIテストがトグルを操作した結果が実ユーザー設定へ
@@ -104,7 +102,27 @@ struct TameoApp: App {
             _snippetStore = State(initialValue: snippetStore)
             _updater = State(initialValue: updater)
         } catch {
+            // ここへ来るのは、退避して作り直してもなお開けない場合だけ（ディスク不足・権限など）。
+            // ストアが 1 つも開けないならアプリは機能しないため、原因が残るよう停止する。
             fatalError("Failed to create ModelContainer: \(error)")
+        }
+    }
+
+    /// ストアを開く。壊れていて開けない場合は、そのファイルを退避してから空のストアで開き直す。
+    ///
+    /// 以前はここで素通しに throw して `fatalError` に落ちていたため、ストアが一度壊れると
+    /// アプリが二度と起動せず、ユーザーは `~/Library/Application Support/Tameo/` を自力で
+    /// 消すまで復旧できなかった。履歴を失うのは痛いが、起動不能よりは軽い。壊れたファイルは
+    /// 削除せず退避するので、後から手で救出できる。
+    private static func makeContainer(at storeURL: URL) throws -> ModelContainer {
+        let config = ModelConfiguration(url: storeURL)
+        let models: [any PersistentModel.Type] = [ClipboardItem.self, SnippetFolder.self, Snippet.self]
+        do {
+            return try ModelContainer(for: Schema(models), configurations: config)
+        } catch {
+            NSLog("Tameo: ストアを開けませんでした。退避して作り直します: %@", String(describing: error))
+            StoreLocation.quarantineStore(at: storeURL)
+            return try ModelContainer(for: Schema(models), configurations: config)
         }
     }
 

@@ -38,6 +38,10 @@ Package.resolved
 *.mobileprovision
 *.provisionprofile
 ExportOptions.plist
+# 上の行は scripts/ExportOptions.plist にもマッチしてしまう。これは秘密を含まない書き出し設定
+# （method/teamID のみ）で、release.sh が必要とするため追跡対象。除外を打ち消す。
+# gitignore は後勝ちなので、この否定は必ず上の行より後に置くこと。
+!scripts/ExportOptions.plist
 .env
 
 # Sparkle 署名鍵など

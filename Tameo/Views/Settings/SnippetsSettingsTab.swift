@@ -157,15 +157,24 @@ struct SnippetsSettingsTab: View {
         panel.message = "Select a Clipy snippets XML export"
         NSApp.activate()   // runModal 前の前面化保険（設定ウィンドウが既に前面なら no-op）
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            let folders = try ClipySnippetImporter.parse(url: url)
-            let result = store.importClipyFolders(folders)
-            // 取り込みは末尾追加（既存は保持）。同じファイルを再度取り込むと重複が増えることを明示する。
-            importMessage = "Added \(result.folders) folder(s) and \(result.snippets) snippet(s). Existing snippets were kept."
-        } catch {
-            importMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        // 読み込みと解析はメインから外す。ここで同期実行すると、大きなファイルを選んだだけで
+        // 設定ウィンドウごと固まる（`Data(contentsOf:)` と `XMLParser.parse()` の両方が重い）。
+        // SwiftData への書き込みは MainActor 側で行う必要があるため、解析結果だけを持ち帰る。
+        Task {
+            let parsed: Result<[ClipyImportedFolder], Error> = await Task.detached(priority: .userInitiated) {
+                do { return .success(try ClipySnippetImporter.parse(url: url)) }
+                catch { return .failure(error) }
+            }.value
+            switch parsed {
+            case .success(let folders):
+                let result = store.importClipyFolders(folders)
+                // 取り込みは末尾追加（既存は保持）。同じファイルを再度取り込むと重複が増えることを明示する。
+                importMessage = "Added \(result.folders) folder(s) and \(result.snippets) snippet(s). Existing snippets were kept."
+            case .failure(let error):
+                importMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+            showImportResult = true
         }
-        showImportResult = true
     }
 
     /// 全スニペットを Clipy 互換 XML で書き出す（`importFromClipy` と往復可能）。
