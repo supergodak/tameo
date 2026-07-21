@@ -11,10 +11,14 @@ final class HistoryStore {
     private let modelContext: ModelContext
     /// 履歴の最大保持数の真実源（設定で可変）。超過分は古い順に削除。
     private let settings: SettingsStore
+    /// 一度きり移行（backfill/dedupe/encrypt）の完了フラグ置き場。
+    /// テストは使い捨てスイートを注入し、実 `.standard` を汚さない（v0.1.9 の教訓）。
+    private let flagDefaults: UserDefaults
 
-    init(modelContext: ModelContext, settings: SettingsStore) {
+    init(modelContext: ModelContext, settings: SettingsStore, flagDefaults: UserDefaults = .standard) {
         self.modelContext = modelContext
         self.settings = settings
+        self.flagDefaults = flagDefaults
     }
 
     /// 監視側が組み立てた捕捉ペイロードを履歴へ取り込む（全種別共通の入口）。
@@ -23,12 +27,12 @@ final class HistoryStore {
         guard !payload.isConcealed else { return }
         guard payload.byteSize > 0 else { return }
 
-        let hash = ContentHash.sha256Hex(payload.canonicalBytes)
+        let hash = HistoryVault.blindIndexHex(payload.canonicalBytes)
 
         // レガシ行（M3 前）は contentHash が空。全体検索の前に最新行だけ一度補完する
         // （アップグレード後の初回再コピーで重複が出るのを全移行なしで防ぐ）。
         if let newest = newestItem(), newest.contentHash.isEmpty {
-            newest.contentHash = ContentHash.sha256Hex(canonicalBytes(of: newest))
+            newest.contentHash = HistoryVault.blindIndexHex(canonicalBytes(of: newest))
         }
 
         // 全体重複排除（bump-to-top）: 履歴の「どこか」に同種別・同内容の既存項目があれば、
@@ -133,13 +137,13 @@ final class HistoryStore {
         save()
     }
 
-    /// 履歴を検索する。クエリと種別フィルタは **DB 側の述語**で適用し、結果の上位 `limit` 件を返す。
+    /// 履歴を検索する。種別フィルタは DB 側の述語、**テキスト照合は復号済み索引のメモリ内**で行い、
+    /// 上位 `limit` 件を返す。
     ///
-    /// 以前はパレット側が「最新 100 件を取得 → その配列をインメモリで絞る」実装だったため、
-    /// 保持上限（既定 200・最大 1000）のうち 101 件目以降は検索に一切現れなかった
-    /// （README の "Search everything" / "full-text history search" と食い違っていた）。
-    /// `limit` は「全履歴を検索した結果の上位 N 件」に掛かるので、パレットのページ数は保ったまま
-    /// 全件が検索対象になる。
+    /// 索引（`searchIndex`）は保存時暗号化の対象なので `#Predicate` では照合できない。
+    /// 全件（保持上限＝既定 200・最大 1000）をフェッチして復号索引で絞る。復号は項目ごとに
+    /// `@Transient` キャッシュされるため、毎キーストロークの実コストは文字列 contains のみ。
+    /// 「全履歴が検索対象」（101 件目以降も見つかる）という 0.1.10 の保証は変わらない。
     ///
     /// - Parameters:
     ///   - query: 生のクエリ。ここで索引と同じ規則へ正規化する（全角/かな/大小の揺れを吸収）。
@@ -155,22 +159,18 @@ final class HistoryStore {
         let kindRaws = kinds.map(\.rawValue)
 
         var d: FetchDescriptor<ClipboardItem>
-        switch (q.isEmpty, kindRaws.isEmpty) {
-        case (true, true):
+        if kindRaws.isEmpty {
             d = FetchDescriptor<ClipboardItem>(sortBy: sort)
-        case (false, true):
-            d = FetchDescriptor<ClipboardItem>(
-                predicate: #Predicate { $0.searchIndex.contains(q) }, sortBy: sort)
-        case (true, false):
+        } else {
             d = FetchDescriptor<ClipboardItem>(
                 predicate: #Predicate { kindRaws.contains($0.kindRaw) }, sortBy: sort)
-        case (false, false):
-            d = FetchDescriptor<ClipboardItem>(
-                predicate: #Predicate { kindRaws.contains($0.kindRaw) && $0.searchIndex.contains(q) },
-                sortBy: sort)
         }
-        d.fetchLimit = limit
-        return (try? modelContext.fetch(d)) ?? []
+        if q.isEmpty {
+            d.fetchLimit = limit
+            return (try? modelContext.fetch(d)) ?? []
+        }
+        guard let all = try? modelContext.fetch(d) else { return [] }
+        return Array(all.lazy.filter { $0.searchIndex.contains(q) }.prefix(limit))
     }
 
     /// 履歴から 1 項目だけ削除する（パレットの ⌘⌫）。
@@ -203,14 +203,14 @@ final class HistoryStore {
     /// 失敗時はフラグを立てずに次回起動で再試行させる。
     func backfillSearchIndexIfNeeded() {
         let key = "tameo.searchIndex.backfilled"
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
-        let d = FetchDescriptor<ClipboardItem>(
-            predicate: #Predicate { $0.searchIndex.isEmpty }
-        )
-        guard let items = try? modelContext.fetch(d) else {
+        guard !flagDefaults.bool(forKey: key) else { return }
+        // searchIndex は暗号化アクセサ（computed）になったため #Predicate では絞れない。
+        // 全件フェッチして復号索引でメモリ内判定する（保持上限規模なので同期パスで十分）。
+        guard let all = try? modelContext.fetch(FetchDescriptor<ClipboardItem>()) else {
             NSLog("Tameo: searchIndex backfill fetch failed; 次回起動で再試行します")
             return
         }
+        let items = all.filter { $0.searchIndex.isEmpty }
         if !items.isEmpty {
             for item in items {
                 item.searchIndex = item.searchableSourceText
@@ -220,7 +220,7 @@ final class HistoryStore {
                 return
             }
         }
-        UserDefaults.standard.set(true, forKey: key)
+        flagDefaults.set(true, forKey: key)
     }
 
     /// 既存履歴に溜まった重複行を一度だけ掃除する（bump-to-top 導入前に積まれた分の後始末）。起動時に1回呼ぶ。
@@ -231,7 +231,7 @@ final class HistoryStore {
     /// 一時的な DB エラーで掃除が永久に走らなくなっていた。
     func dedupeExistingHistoryIfNeeded() {
         let key = "tameo.history.deduped.v1"
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        guard !flagDefaults.bool(forKey: key) else { return }
 
         // 新しい順に走査し、初めて見た (種別+ハッシュ) を残し、以降の同一キーは削除する。
         let d = FetchDescriptor<ClipboardItem>(sortBy: [SortDescriptor(\.lastUsedAt, order: .reverse)])
@@ -244,7 +244,7 @@ final class HistoryStore {
         var changed = false
         for item in items {
             if item.contentHash.isEmpty {
-                item.contentHash = ContentHash.sha256Hex(canonicalBytes(of: item))
+                item.contentHash = HistoryVault.blindIndexHex(canonicalBytes(of: item))
                 changed = true                      // ハッシュ補完だけでも保存対象
             }
             let groupKey = item.kindRaw + "\u{0}" + item.contentHash
@@ -263,7 +263,77 @@ final class HistoryStore {
                 return
             }
         }
-        UserDefaults.standard.set(true, forKey: key)
+        flagDefaults.set(true, forKey: key)
+    }
+
+    /// 既存の平文履歴を一度だけ暗号化する（保存時暗号化の導入移行）。起動時に、他の一度きり処理より先に呼ぶ。
+    ///
+    /// - 触る前に SQLite Backup API でストアを丸ごと退避する（v0.1.8 のデータ消失事故の教訓。
+    ///   `storeURL` が nil のとき＝インメモリテストではスキップ）。
+    /// - 各フィールドを復号アクセサ経由で読み、同じ値を書き戻す＝setter が暗号化して平文カラムを空にする。
+    /// - `contentHash` は素の SHA-256 から鍵付き HMAC（blind index）へ再計算する。全行を同時に
+    ///   再計算するので、移行後も重複排除（bump-to-top）は正しく機能する。
+    /// - フラグは**成功したときだけ**立てる（backfill/dedupe と同じ理由）。失敗時は次回起動で再試行。
+    func encryptLegacyHistoryIfNeeded(storeURL: URL?) {
+        let key = "tameo.history.encrypted.v1"
+        guard !flagDefaults.bool(forKey: key) else { return }
+
+        guard let all = try? modelContext.fetch(FetchDescriptor<ClipboardItem>()) else {
+            NSLog("Tameo: 暗号化移行の fetch に失敗; 次回起動で再試行します")
+            return
+        }
+        let legacy = all.filter(\.needsEncryptionMigration)
+        let backupURL = storeURL?.deletingLastPathComponent()
+            .appendingPathComponent("Tameo.store.pre-encryption-backup")
+
+        if !legacy.isEmpty {
+            // 1. 移行前バックアップ（同ディレクトリに固定名で1つ。再試行時は上書き＝常に「未移行状態」の控え）。
+            if let storeURL, let backupURL {
+                if let failure = StoreLocation.backupDatabase(from: storeURL, to: backupURL) {
+                    NSLog("Tameo: 暗号化移行前のバックアップに失敗（移行は中止・次回起動で再試行）: %@", failure)
+                    return
+                }
+            }
+
+            // 2. 全フィールドを読み→書き戻し（setter が暗号化）。ハッシュは HMAC へ再計算。
+            let sampleBefore = legacy.first?.content
+            for item in legacy {
+                item.content = item.content
+                item.searchIndex = item.searchIndex
+                item.ocrText = item.ocrText
+                item.fileURLStrings = item.fileURLStrings
+                item.colorHex = item.colorHex
+                item.payloadData = item.payloadData
+                item.thumbnailPNG = item.thumbnailPNG
+                item.contentHash = HistoryVault.blindIndexHex(canonicalBytes(of: item))
+            }
+            guard save() else {
+                NSLog("Tameo: 暗号化移行の保存に失敗; 次回起動で再試行します")
+                return
+            }
+            // 3. 検証: 移行後も同じ内容が読めること（読めなければフラグを立てず、バックアップも残す）。
+            if let sampleBefore, legacy.first?.content != sampleBefore {
+                NSLog("Tameo: 暗号化移行の検証に失敗（内容不一致）。バックアップを残して次回起動で再試行します")
+                return
+            }
+            NSLog("Tameo: 履歴 %d 件を暗号化しました", legacy.count)
+        }
+
+        // 4. 平文の残骸の物理削除（**行の暗号化だけでは不十分**）。UPDATE 前の古い行イメージは
+        //    SQLite の空きページ・WAL に残り、ファイルの生バイトから平文が読める（strings で実証済み）。
+        //    WAL チェックポイント＋VACUUM でファイルを作り直して残骸ごと消す。
+        //    失敗したらフラグを立てず次回起動で再試行（そのとき legacy は空でもここへ到達する）。
+        if let storeURL {
+            if let failure = StoreLocation.compactStore(at: storeURL) {
+                NSLog("Tameo: 暗号化移行後の VACUUM に失敗; 次回起動で再試行します: %@", failure)
+                return
+            }
+            // 5. 検証済みなので平文の控え（バックアップ）は処分する。残すと「保存時暗号化」の意味が薄れる。
+            if let backupURL, FileManager.default.fileExists(atPath: backupURL.path) {
+                try? FileManager.default.removeItem(at: backupURL)
+            }
+        }
+        flagDefaults.set(true, forKey: key)
     }
 
     /// 渡された一覧のうち検索インデックスが空の行を補完する（一覧表示の直前に使う遅延 backfill）。

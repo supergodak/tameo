@@ -125,7 +125,8 @@ enum StoreLocation {
     /// （そして旧ストアが他プロセスと共用なのは、この移行コードが存在する理由そのものである）。
     /// Backup API は書き込みと競合したら自動でやり直し、常に整合したページ集合を書き出す。
     /// 出力は WAL を取り込んだ単一ファイルなので、-wal / -shm を持ち出す必要もない。
-    private static func backupDatabase(from source: URL, to destination: URL) -> String? {
+    /// （履歴暗号化の移行前バックアップでも使うため internal。）
+    static func backupDatabase(from source: URL, to destination: URL) -> String? {
         var src: OpaquePointer?
         guard sqlite3_open_v2(source.path, &src, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
             let reason = src.map { String(cString: sqlite3_errmsg($0)) } ?? "open source failed"
@@ -150,6 +151,32 @@ enum StoreLocation {
         let finish = sqlite3_backup_finish(backup)
         guard step == SQLITE_DONE else { return "backup_step failed (code \(step))" }
         guard finish == SQLITE_OK else { return "backup_finish failed (code \(finish))" }
+        return nil
+    }
+
+    /// WAL をチェックポイントで取り込み、VACUUM でデータベースを再構築する。成功なら nil、失敗なら理由。
+    ///
+    /// 暗号化移行の**仕上げに必須**。UPDATE は古い行イメージを空きページ・WAL に残すため、
+    /// 行を暗号化しただけではファイルの生バイトに平文の残骸が残る（strings で実際に読めた）。
+    /// VACUUM は生きているページだけでファイルを作り直すので、残骸ごと消える。
+    /// アプリの CoreData 接続が生きたまま別接続で実行するため busy_timeout を置く。
+    /// 混んでいて失敗したら呼び出し側が次回起動で再試行する。
+    static func compactStore(at url: URL) -> String? {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
+            let reason = db.map { String(cString: sqlite3_errmsg($0)) } ?? "open failed"
+            sqlite3_close(db)
+            return reason
+        }
+        defer { sqlite3_close(db) }
+        sqlite3_busy_timeout(db, 5000)
+
+        guard sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE);", nil, nil, nil) == SQLITE_OK else {
+            return "wal_checkpoint failed: \(String(cString: sqlite3_errmsg(db)))"
+        }
+        guard sqlite3_exec(db, "VACUUM;", nil, nil, nil) == SQLITE_OK else {
+            return "vacuum failed: \(String(cString: sqlite3_errmsg(db)))"
+        }
         return nil
     }
 }

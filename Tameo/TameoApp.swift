@@ -33,8 +33,19 @@ struct TameoApp: App {
             // ~/Library/Application Support/default.store に書き、他アプリ／Appleエージェントが
             // 同じストアを開くと軽量マイグレーションで当方のデータが削除される（2026-07-08 に実発生）。
             // 詳細と旧ストアからの一度きり移行は StoreLocation を参照。
-            let storeURL = try StoreLocation.dedicatedStoreURL()
-            StoreLocation.migrateLegacyDefaultStoreIfNeeded(to: storeURL)
+            // テスト実行時は**ストアも隔離**する（設定と同じ理由）。テストホストが実ストアを開くと、
+            // 開発中のスキーマ変更が実データへ勝手に軽量マイグレーションされる
+            // （2026-07-22 に実発生: テスト実行だけで実ストアの列が改名された。データは無傷だが危険）。
+            let storeURL: URL
+            if Self.isRunningTests {
+                let dir = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("tameo-testhost-store", isDirectory: true)
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                storeURL = dir.appendingPathComponent("Tameo.store")
+            } else {
+                storeURL = try StoreLocation.dedicatedStoreURL()
+                StoreLocation.migrateLegacyDefaultStoreIfNeeded(to: storeURL)
+            }
             // 履歴に加えスニペット2モデルを同一ストアへ。既定値付きフィールドのみのため
             // 既存 ClipboardItem データはエンティティ追加だけで無傷（lightweight migration）。
             let container = try Self.makeContainer(at: storeURL)
@@ -70,6 +81,7 @@ struct TameoApp: App {
             var updater: UpdaterController?
             if !Self.isRunningTests {
                 monitor.start()                          // 起動と同時に監視開始（履歴を溜める）
+                store.encryptLegacyHistoryIfNeeded(storeURL: storeURL)  // 平文履歴の一度きり暗号化（バックアップ→移行。他の一度きり処理より先）
                 store.backfillSearchIndexIfNeeded()      // 既存行の検索インデックス補完（UserDefaults ガード）
                 store.dedupeExistingHistoryIfNeeded()    // 溜まった重複の一度きり掃除（UserDefaults ガード）
                 hotKeyCenter = HotKeyCenter(             // ⌘⇧V=履歴 / ⌘⇧B=スニペット（起動時に一度だけ）
