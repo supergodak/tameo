@@ -31,6 +31,19 @@ struct GeneralSettingsTab: View {
             } footer: {
                 Text("Older items beyond this count are removed automatically. Sort order controls how the palette lists history.")
             }
+
+            Section {
+                Toggle("Full-width letters & digits → half-width", isOn: $settings.transformHalfWidth)
+                    .accessibilityIdentifier("toggle.transformHalfWidth")
+                Toggle("Strip URL tracking parameters (utm_*, fbclid, …)", isOn: $settings.transformCleanURL)
+                    .accessibilityIdentifier("toggle.transformCleanURL")
+                Toggle("Tidy whitespace (trim, join lines)", isOn: $settings.transformTidyWhitespace)
+                    .accessibilityIdentifier("toggle.transformTidyWhitespace")
+            } header: {
+                Text("Paste Transform (⌃+number in the palette)")
+            } footer: {
+                Text("Hold ⌃ while picking an item to paste it as plain text with the checked transforms applied. Your history is never modified — only the pasted copy.")
+            }
         }
         .formStyle(.grouped)
     }

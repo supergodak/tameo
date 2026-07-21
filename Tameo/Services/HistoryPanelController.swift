@@ -407,7 +407,10 @@ final class HistoryPanelController {
         case 123: handleLeftArrow(); return true                                  // ← : 出る or ページ送り（前）
         case 124: handleRightArrow(); return true                                 // → : 入る or ページ送り（次）
         case 48: animated { switchSource() }; return true                         // ⇥ : History ⇄ Snippets
-        case 36, 76: commitSelected(asPlainText: event.modifierFlags.contains(.option)); return true  // ⏎（⌥=平文）
+        case 36, 76:  // ⏎（⌥=平文 / ⌃=変換貼付）
+            commitSelected(asPlainText: event.modifierFlags.contains(.option),
+                           transformed: event.modifierFlags.contains(.control))
+            return true
         default: break
         }
 
@@ -465,6 +468,15 @@ final class HistoryPanelController {
             }
             return true
         }
+        if mods == .control {
+            // ⌃+数字: 変換して貼り付け（設定で有効な変換を平文に適用）。⌥と同じく厳密一致で判定。
+            let row = digit == 0 ? 9 : digit - 1
+            if row < model.pageItems.count {
+                model.rowInPage = row
+                commitSelected(transformed: true)
+            }
+            return true
+        }
         if mods.isEmpty {
             // 履歴で検索中（モード or クエリ非空）なら数字はクエリへ＝フィールドに通す。
             if isHistory, model.searchActive || !model.query.isEmpty {
@@ -483,20 +495,27 @@ final class HistoryPanelController {
 
     // MARK: - Private
 
-    private func commitSelected(asPlainText: Bool = false) {
+    private func commitSelected(asPlainText: Bool = false, transformed: Bool = false) {
         guard let row = model.selectedRow else { return }
-        commit(row, asPlainText: asPlainText)
+        commit(row, asPlainText: asPlainText, transformed: transformed)
     }
 
     /// 選択確定：履歴/スニペットは貼り付けて閉じ、フォルダは中へ入る（閉じない）。
     /// `asPlainText`=true（⌥）はリッチ装飾を捨てて平文で貼る（履歴の RTF/RTFD 等向け）。
-    private func commit(_ row: PaletteRow, asPlainText: Bool = false) {
+    /// `transformed`=true（⌃）は平文に設定済みの貼付変換（半角化/URLクリーン/空白整理）を掛けて貼る。
+    private func commit(_ row: PaletteRow, asPlainText: Bool = false, transformed: Bool = false) {
         switch row {
         case .folder(let folder):
             animated { enterFolder(folder) }
         case .history(let item):
             hide()
             store.markUsed(item)
+            // ⌃（変換）: 平文（OCRテキストがあればそちら）に変換を適用して貼る。履歴側は変更しない。
+            if transformed {
+                let base = item.ocrText.isEmpty ? item.content : item.ocrText
+                paste.pasteText(PasteTransformer.apply(base, settings: settings), to: pasteTarget)
+                return
+            }
             // ⌥（平文）＋ OCRテキストあり → 画像/パスでなく認識テキストを貼る。
             // 画像ピクセル(png/tiff)・画像ファイルを指す filename の両方を対象にする。
             if asPlainText, !item.ocrText.isEmpty {
@@ -506,8 +525,9 @@ final class HistoryPanelController {
             }
         case .snippet(let snippet):
             hide()
-            // スニペット本文は元から平文。pasteText は gate を通すので履歴を汚染しない。
-            paste.pasteText(snippet.content, to: pasteTarget)
+            // スニペット本文は元から平文。⌃⏎ならスニペットにも変換を掛ける（体系の一貫性）。
+            let text = transformed ? PasteTransformer.apply(snippet.content, settings: settings) : snippet.content
+            paste.pasteText(text, to: pasteTarget)
         }
     }
 

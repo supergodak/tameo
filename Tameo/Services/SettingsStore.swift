@@ -46,6 +46,14 @@ final class SettingsStore {
     /// コピーした画像をオンデバイス OCR して検索・テキスト貼付を可能にする（既定 true）。完全ローカル。
     var ocrEnabled: Bool { didSet { defaults.set(ocrEnabled, forKey: Keys.ocrEnabled) } }
 
+    // MARK: - 貼付変換（パレットの ⌃番号 / ⌃⏎ で適用）。適用順は URLクリーン → 全角→半角 → 空白整理。
+    /// 全角英数・記号を半角へ（既定 true）。かな・漢字には触れない。
+    var transformHalfWidth: Bool { didSet { defaults.set(transformHalfWidth, forKey: Keys.transformHalfWidth) } }
+    /// URL のトラッキングパラメータ（utm_* / fbclid 等）を除去（既定 true）。テキスト全体が単一URLのときだけ働く。
+    var transformCleanURL: Bool { didSet { defaults.set(transformCleanURL, forKey: Keys.transformCleanURL) } }
+    /// 前後トリム＋改行を空白に＋連続空白の圧縮（既定 false）。PDFコピペの改行混入対策。
+    var transformTidyWhitespace: Bool { didSet { defaults.set(transformTidyWhitespace, forKey: Keys.transformTidyWhitespace) } }
+
     /// 除外アプリの bundle id 群。これらが前面のときコピーした内容は履歴に残さない（既定: 空）。
     var excludedBundleIDs: [String] {
         didSet { defaults.set(excludedBundleIDs, forKey: Keys.excludedBundleIDs) }
@@ -75,6 +83,9 @@ final class SettingsStore {
         self.storeURL = (defaults.object(forKey: Keys.storeURL) as? Bool) ?? true
         self.storeColor = (defaults.object(forKey: Keys.storeColor) as? Bool) ?? true
         self.ocrEnabled = (defaults.object(forKey: Keys.ocrEnabled) as? Bool) ?? true
+        self.transformHalfWidth = (defaults.object(forKey: Keys.transformHalfWidth) as? Bool) ?? true
+        self.transformCleanURL = (defaults.object(forKey: Keys.transformCleanURL) as? Bool) ?? true
+        self.transformTidyWhitespace = (defaults.object(forKey: Keys.transformTidyWhitespace) as? Bool) ?? false
         self.excludedBundleIDs = defaults.stringArray(forKey: Keys.excludedBundleIDs) ?? []
         // ログイン項目は OS の登録状態を初期値に（.requiresApproval も実質有効として扱う。UserDefaults とは独立）。
         self.launchAtLogin = Self.isEffectivelyEnabled(SMAppService.mainApp.status)
@@ -131,6 +142,9 @@ final class SettingsStore {
         static let storeURL = "tameo.store.url"
         static let storeColor = "tameo.store.color"
         static let ocrEnabled = "tameo.ocrEnabled"
+        static let transformHalfWidth = "tameo.transform.halfWidth"
+        static let transformCleanURL = "tameo.transform.cleanURL"
+        static let transformTidyWhitespace = "tameo.transform.tidyWhitespace"
         static let excludedBundleIDs = "tameo.excludedBundleIDs"
     }
 }
