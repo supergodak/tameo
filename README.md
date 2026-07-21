@@ -31,7 +31,7 @@
 - **Filtered before it's read.** Tameo checks only *what kind* of data is on the pasteboard first, and drops concealed items, excluded apps and disabled types **before reading any content**. Every content read lives in [one auditable place](Tameo/Services/ClipboardMonitor.swift).
 - **Native & properly signed.** Apple-Silicon-native, distributed with ATI's Developer ID signature (grant Accessibility once), notarized, auto-updating via Sparkle.
 - **Snippets, with Clipy import.** Bring your existing Clipy snippets across.
-- **Japanese-first friendly.** JIS / kana layouts work correctly (via [Sauce](https://github.com/Clipy/Sauce)), with a Japanese UI.
+- **Japanese-first friendly.** JIS / kana layouts work correctly (via [Sauce](https://github.com/Clipy/Sauce)), and search folds kana/width variants so Japanese text is found however you type it. UI is in English.
 
 ### Features
 
