@@ -62,6 +62,13 @@ enum HistoryVault {
         if NSClassFromString("XCTestCase") != nil {
             return SymmetricKey(size: .bits256)
         }
+        #if DEBUG
+        // スクショ撮影のデモモードも一時鍵で動かす。Debug 署名は Developer ID 署名版が作った
+        // Keychain 項目にアクセスできず、認証ダイアログが出てパレットの撮影を妨げるため。
+        if CommandLine.arguments.contains(where: { $0.hasPrefix("--demo-shot=") }) {
+            return SymmetricKey(size: .bits256)
+        }
+        #endif
         if let existing = readKeyFromKeychain() { return existing }
 
         let newKey = SymmetricKey(size: .bits256)

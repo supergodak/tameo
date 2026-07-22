@@ -181,6 +181,44 @@ final class HistoryPanelController {
         if let panel, panel.isVisible { hide() } else { show(source: .snippetFolders) }
     }
 
+    #if DEBUG
+    /// デモ時はアクセシビリティ権限バナーを写さない（Debug 署名は権限を持てないため）。
+    private var demoForceTrusted = false
+
+    /// スクリーンショット撮影用に、指定の状態でパレットを画面中央に開く（DEBUG のデモモード専用）。
+    func demoShow(_ shot: DemoSeed.Shot) {
+        demoForceTrusted = true
+        switch shot {
+        case .history:
+            show(source: .history)
+        case .search:
+            show(source: .history)
+            model.searchActive = true
+            model.query = "ATI"                  // 複数のテキスト履歴にヒット
+            reloadHistoryRows()
+        case .ocr:
+            show(source: .history)
+            model.searchActive = true
+            model.query = "御見積"               // 画像内の文字（実 OCR の認識結果）にヒット
+            reloadHistoryRows()
+        case .snippets:
+            // フォルダ一覧より、中身（定型文が並ぶ）の方が機能が伝わる。
+            if let first = snippetStore.enabledFolders().first {
+                show(source: .snippetItems(first))
+            } else {
+                show(source: .snippetFolders)
+            }
+        }
+        if let panel, let screen = NSScreen.main {
+            let f = panel.frame, sf = screen.visibleFrame
+            panel.setFrameOrigin(NSPoint(x: sf.midX - f.width / 2, y: sf.midY - f.height / 2))
+            // 撮影スクリプトがウィンドウ単体（影付き透過）を撮れるよう、CGWindowID を既知パスへ書く。
+            try? "\(panel.windowNumber)".write(toFile: "/tmp/tameo-demo-window-id",
+                                               atomically: true, encoding: .utf8)
+        }
+    }
+    #endif
+
     /// パレットを開く直前の貼り付け先を決める。
     /// フォーカスは「活性化状態」ではなく AX の `kAXFocusedApplicationAttribute` で追う。
     /// Spotlight / Alfred / Toppoi 型の非活性パネルは frontmost に現れず（自アプリや背後アプリが返る）、
@@ -211,7 +249,12 @@ final class HistoryPanelController {
         case .snippetFolders: loadSnippetFolders()
         case .snippetItems(let folder): loadSnippetFolders(); enterFolder(folder)
         }
+        #if DEBUG
+        // デモ（撮影）は Debug 署名でアクセシビリティ権限を持てないので、バナーを写さないよう許可済み扱いにする。
+        model.accessibilityTrusted = demoForceTrusted || AccessibilityAuthorization.isTrusted
+        #else
         model.accessibilityTrusted = AccessibilityAuthorization.isTrusted
+        #endif
 
         let panel = ensurePanel()
         // バナー（権限未許可）の有無で縦を変える。ビュー側 `.frame` と同じ式で揃え、隙間/見切れを防ぐ。

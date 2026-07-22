@@ -27,6 +27,19 @@ struct TameoApp: App {
             || CommandLine.arguments.contains("--uitest")
     }
 
+    /// スクリーンショット撮影用のデモモード（DEBUG 限定・`--demo-shot=…`）。
+    /// テストと同様にストア・設定を隔離し、監視／移行／ホットキー／自動更新を止める。
+    static var isDemoMode: Bool {
+        #if DEBUG
+        return DemoSeed.requestedShot != nil
+        #else
+        return false
+        #endif
+    }
+
+    /// 副作用（監視・移行・ホットキー・Sparkle）を起こさない実行形態か。
+    private static var isSideEffectFree: Bool { isRunningTests || isDemoMode }
+
     init() {
         do {
             // 専用ストアパスを明示指定する（重要）。設定なしの ModelContainer(for:) は全アプリ共用の
@@ -37,7 +50,14 @@ struct TameoApp: App {
             // 開発中のスキーマ変更が実データへ勝手に軽量マイグレーションされる
             // （2026-07-22 に実発生: テスト実行だけで実ストアの列が改名された。データは無傷だが危険）。
             let storeURL: URL
-            if Self.isRunningTests {
+            if Self.isDemoMode {
+                // デモは毎回まっさらな別ストアから（前回の seed を残さない）。実ストアには触れない。
+                let dir = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("tameo-demo-store", isDirectory: true)
+                try? FileManager.default.removeItem(at: dir)
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                storeURL = dir.appendingPathComponent("Tameo.store")
+            } else if Self.isRunningTests {
                 let dir = FileManager.default.temporaryDirectory
                     .appendingPathComponent("tameo-testhost-store", isDirectory: true)
                 try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -55,8 +75,8 @@ struct TameoApp: App {
             // 焼き付く（2026-07-09: UIテストが storeText / 自動⌘V を OFF に固定し、実機でテキスト保存が
             // 止まる事故が発生）。毎起動でこのドメインをリセットし、テスト間の状態漏れも同時に防ぐ。
             let settings: SettingsStore
-            if Self.isRunningTests {
-                let suiteName = "jp.co.ati-mirai.tameo.uitest"
+            if Self.isSideEffectFree {
+                let suiteName = Self.isDemoMode ? "jp.co.ati-mirai.tameo.demo" : "jp.co.ati-mirai.tameo.uitest"
                 let suite = UserDefaults(suiteName: suiteName) ?? .standard
                 suite.removePersistentDomain(forName: suiteName)
                 settings = SettingsStore(defaults: suite)
@@ -79,7 +99,7 @@ struct TameoApp: App {
             // 依存し、テストのDB/挙動検証を汚す／初回プロンプトでハングさせるため。
             var hotKeyCenter: HotKeyCenter?
             var updater: UpdaterController?
-            if !Self.isRunningTests {
+            if !Self.isSideEffectFree {
                 monitor.start()                          // 起動と同時に監視開始（履歴を溜める）
                 store.encryptLegacyHistoryIfNeeded(storeURL: storeURL)  // 平文履歴の一度きり暗号化（バックアップ→移行。他の一度きり処理より先）
                 store.backfillSearchIndexIfNeeded()      // 既存行の検索インデックス補完（UserDefaults ガード）
@@ -113,6 +133,19 @@ struct TameoApp: App {
             _settings = State(initialValue: settings)
             _snippetStore = State(initialValue: snippetStore)
             _updater = State(initialValue: updater)
+
+            #if DEBUG
+            // デモモード: 無害なデータを投入し、指定の画面でパレットを中央に開く（撮影用）。
+            // UI が立ち上がってから実行するため main へ非同期投入。OCR の非同期認識に少し猶予を置く。
+            if let shot = DemoSeed.requestedShot {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    DemoSeed.populate(store: store, snippets: snippetStore)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+                        panelController.demoShow(shot)
+                    }
+                }
+            }
+            #endif
         } catch {
             // ここへ来るのは、退避して作り直してもなお開けない場合だけ（ディスク不足・権限など）。
             // ストアが 1 つも開けないならアプリは機能しないため、原因が残るよう停止する。
