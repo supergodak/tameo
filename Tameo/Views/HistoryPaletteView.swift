@@ -6,10 +6,12 @@ import AppKit
 /// 両者の高さがズレて隙間/見切れが出ないようにする。
 enum PaletteMetrics {
     static let width: CGFloat = 360
-    // 案B（余白・上質）: 1ページ7件（PaletteModel.pageSize）を、行間すき間つき2段組でゆったり並べる。
-    // ヘッダ36＋検索/種別78＋7行(50×7+すき間5×6=380)＋プレビュー54＋フッタ44＋区切り線 ≒ 600。
-    // 検索バーは履歴ソースでのみ描画され、スニペット時はその分が下部スペースに回るだけで破綻しない。
-    static let baseHeight: CGFloat = 600
+    // 案B（余白・上質）: 履歴は1ページ7件・スニペットは8件（`PaletteModel.pageSize`）を、
+    // 行間すき間つき2段組でゆったり並べる。
+    // ヘッダ36＋検索/種別78＋7行(50×7+すき間5×6=380)＋"more"行20＋プレビュー54＋フッタ44＋区切り線 ≒ 624。
+    // 検索バーは履歴ソースでのみ描画され、スニペット時はその分が行数（7→8）と下部スペースに回る。
+    // フッタの凡例は1行に収まる長さに保つこと（折り返すとこの固定高を超えて見切れる）。
+    static let baseHeight: CGFloat = 624
     /// 権限バナー表示時に縦へ加える分（バナー＋区切り線の高さを上回る値。これで内容が固定高を超えて
     /// 中央寄せ・上下見切れになるのを防ぐ。未許可状態でだけ適用される一時的な増分）。
     static let bannerExtraHeight: CGFloat = 76
@@ -58,6 +60,7 @@ struct HistoryPaletteView: View {
                 Spacer()
             } else {
                 rows
+                moreIndicator      // 高さは常に確保（ページ送りでレイアウトが動かない）
                 Spacer(minLength: 0)
                 Divider()
                 preview
@@ -123,9 +126,11 @@ struct HistoryPaletteView: View {
     /// フッターのキー凡例（ソース別。→＝入る／←＝出る を文脈で出し分け）。
     private var legend: String {
         switch model.source {
-        case .history: return "type to search · 1-0 paste · ⌘P pin · ⌘⌫ delete · ⌥# plain · ⌃# transform · esc"
-        case .snippetFolders: return "→ open · 1-0 open · ⇥ History · ↑↓ move · esc"
-        case .snippetItems: return "← back · 1-0 paste · ↑↓ move · esc"
+        // 1行に収まる長さに保つ（折り返すとフッタが固定高を超えて見切れる）。
+        // 省いたキー（⌘P ピン・⌘⌫ 削除など）は使い方ガイドに載せてある。
+        case .history: return "type to search · 1-0 paste · ⌥# plain · ⌃# transform · esc"
+        case .snippetFolders: return "⏎ open · 1-0 open · ←→ page · ⇥ History · esc"
+        case .snippetItems: return "⏎ paste · 1-0 paste · ←→ page · esc back"
         }
     }
 
@@ -270,6 +275,20 @@ struct HistoryPaletteView: View {
         // ソース／ページ切替を軽くクロスフェード。実発火はミューテーション側の withAnimation が駆動する。
         .id("\(model.source.key)-\(model.pageIndex)")
         .transition(.opacity)
+    }
+
+    /// 「まだ先がある」ことを示す控えめな手がかり。
+    ///
+    /// ページャのドットと「1/2」表示だけでは、次ページに項目が残っていることに気づけなかった
+    /// （フォルダ 8 個中 8 個目だけが次ページにあり、存在しないと思われた実例がある）。
+    /// 残数と送りキーを、リストの直下に一行で出す。
+    private var moreIndicator: some View {
+        Text(model.hasMorePages ? "… \(model.remainingCount) more  →" : "")
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .frame(maxWidth: .infinity)
+            .frame(height: 15)          // 最終ページでも同じ高さを占め、行の位置がずれないようにする
+            .padding(.top, 5)
     }
 
     /// 行内容の固定高（案B: 2段組＝本文＋種別·時刻。全種別で揃え、10 行が固定ページに収まることを保証）。

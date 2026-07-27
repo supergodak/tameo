@@ -10,9 +10,15 @@ import Observation
 @MainActor
 @Observable
 final class PaletteModel {
-    /// 1ページの表示件数（案B: 余白重視で 7 件。数字キー 1〜7 が有効、残りは次ページ）。
-    /// この定数だけでページャ・フッタのドット・番号バッジが追従する。
-    static let pageSize = 7
+    /// 1ページの表示件数（案B: 余白重視）。この値だけでページャ・フッタのドット・番号バッジが追従する。
+    ///
+    /// 履歴は検索欄＋種別チップが縦を使うので 7 件。スニペットはその領域を描画せず
+    /// 1 行分以上が空くため 8 件並べる（8 個目のフォルダだけが次ページへ取り残されて
+    /// 気づかれない、という実際に起きた見落としを減らす）。
+    var pageSize: Int {
+        if case .history = source { return 7 }
+        return 8
+    }
 
     /// 現在のページ。0 始まり。
     var pageIndex: Int = 0
@@ -58,15 +64,21 @@ final class PaletteModel {
     }
 
     var pageCount: Int {
-        max(1, (rows.count + Self.pageSize - 1) / Self.pageSize)
+        max(1, (rows.count + pageSize - 1) / pageSize)
     }
-    var pageStart: Int { pageIndex * Self.pageSize }
+    var pageStart: Int { pageIndex * pageSize }
 
-    /// 現ページに表示する 10 件（最終ページは 10 件未満になりうる）。
+    /// 現ページに表示する行（最終ページは `pageSize` 未満になりうる）。
     var pageItems: [PaletteRow] {
         guard pageStart < rows.count else { return [] }
-        return Array(rows[pageStart ..< min(pageStart + Self.pageSize, rows.count)])
+        return Array(rows[pageStart ..< min(pageStart + pageSize, rows.count)])
     }
+
+    /// 次のページがあるか（「まだ先がある」手がかりの表示条件）。
+    var hasMorePages: Bool { pageIndex < pageCount - 1 }
+
+    /// 次ページ以降に残っている件数。
+    var remainingCount: Int { max(0, rows.count - (pageStart + pageItems.count)) }
 
     /// 現ページ内の有効な選択行（空なら nil）。ハイライト判定に使う。
     var clampedRow: Int? {
@@ -343,23 +355,11 @@ final class HistoryPanelController {
         }
     }
 
-    /// → ：スニペットのフォルダ一覧で選択がフォルダなら中へ入る、それ以外はページ送り（次）。
-    private func handleRightArrow() {
-        if case .snippetFolders = model.source, case .folder(let folder)? = model.selectedRow {
-            animated { enterFolder(folder) }
-        } else {
-            animated { model.page(by: 1) }
-        }
-    }
-
-    /// ← ：フォルダの中身を見ているときは 1 階層戻る、それ以外はページ送り（前）。
-    private func handleLeftArrow() {
-        if case .snippetItems = model.source {
-            animated { loadSnippetFolders() }
-        } else {
-            animated { model.page(by: -1) }
-        }
-    }
+    // 矢印キー（←→）は全ソースで「ページ送り」に統一してある（handleKeyDown の case 123/124）。
+    // 以前はスニペットのフォルダ一覧でだけ → が「フォルダに入る」・← が「1階層戻る」を兼ねており、
+    // 同じキーが画面ごとに違う意味を持つうえ、フォルダ一覧ではページ送りの手段が実質失われていた
+    // （8 個目のフォルダが次ページにあることに気づけない、という実害が出た）。
+    // 現在は「入る/貼る＝⏎ と数字キー」「1階層戻る＝esc」「ページ送り＝←→」と役割を分けている。
 
     // MARK: - Snapshot
 
@@ -447,8 +447,8 @@ final class HistoryPanelController {
         case 126: animated { model.moveRow(by: -1) }; return true                 // ↑
         case 33: animated { model.page(by: -1) }; return true                     // [ : ページ送り（前）
         case 30: animated { model.page(by: 1) }; return true                      // ] : ページ送り（次）
-        case 123: handleLeftArrow(); return true                                  // ← : 出る or ページ送り（前）
-        case 124: handleRightArrow(); return true                                 // → : 入る or ページ送り（次）
+        case 123: animated { model.page(by: -1) }; return true                    // ← : ページ送り（前）
+        case 124: animated { model.page(by: 1) }; return true                     // → : ページ送り（次）
         case 48: animated { switchSource() }; return true                         // ⇥ : History ⇄ Snippets
         case 36, 76:  // ⏎（⌥=平文 / ⌃=変換貼付）
             commitSelected(asPlainText: event.modifierFlags.contains(.option),
