@@ -140,6 +140,8 @@ Clipy は優れたツールです。Tameo はその挙動・機能だけを参�
 - **直接ダウンロード（公証済みDMG）:** [製品サイト](https://tameo.ati-mirai.co.jp) または [GitHub Releases](https://github.com/supergodak/tameo/releases/latest) から最新版を入手し、**Tameo** を `/Applications` にドラッグします。
 - **Homebrew:** `brew install --cask supergodak/tap/tameo`
 
+> **v0.1.10 以前をお使いの方へ** — 当時の不具合により自動更新が適用されません。お手数ですが上記から最新版を手動でダウンロードし、`/Applications` のアプリを置き換えてください。履歴と設定（`~/Library/Application Support/Tameo/`）はそのまま引き継がれます。
+
 **macOS 14 以降**（Apple Silicon／Intel）。初回起動時に **アクセシビリティ**権限を許可してください（システム設定 ▸ プライバシーとセキュリティ ▸ アクセシビリティ）。前面アプリへの貼り付けに必要です。更新は Sparkle で自動配信されます。
 
 ### ソースからビルド
